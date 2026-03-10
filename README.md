@@ -56,6 +56,13 @@ agent_swarm/
 
 ## Setup
 
+### Getting an Anthropic API key
+
+1. Go to [console.anthropic.com](https://console.anthropic.com) and sign up or log in
+2. Navigate to **API Keys** in the left sidebar
+3. Click **Create Key**, give it a name, and copy it — you won't be able to see it again
+4. Add credits to your account under **Billing** (the API is pay-per-use, no subscription required)
+
 ```bash
 pip install anthropic
 export ANTHROPIC_API_KEY=your_key_here
