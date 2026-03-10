@@ -10,6 +10,7 @@ Usage:
 
 import argparse
 import json
+import os
 import sys
 from orchestrator import run_swarm
 
@@ -39,6 +40,15 @@ def main():
             sys.exit(1)
     else:
         feature_request = args.request or DEFAULT_REQUEST
+
+    # Validate sandbox at startup so failures are obvious, not cryptic mid-run
+    if os.environ.get("SWARM_SANDBOX", "false").lower() == "true":
+        from sandbox import check_sandbox_available
+        available, msg = check_sandbox_available()
+        if not available:
+            print(f"Error: sandbox requested but not available:\n  {msg}", file=sys.stderr)
+            sys.exit(1)
+        print(f"Sandbox: {msg}")
 
     state = run_swarm(
         feature_request=feature_request,

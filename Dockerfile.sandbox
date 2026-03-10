@@ -1,0 +1,15 @@
+# Execution sandbox for agent-generated code.
+# This image is used by sandbox.py to run untrusted generated Python in an
+# isolated container. Keep it lean — only packages the Dev agent is told it
+# can use. Adding packages here requires also updating DEV_SYSTEM in agents.py.
+
+FROM python:3.11-slim
+
+RUN pip install --no-cache-dir \
+    requests \
+    dnspython \
+    pydantic \
+    numpy \
+    pandas \
+    httpx \
+    pytest

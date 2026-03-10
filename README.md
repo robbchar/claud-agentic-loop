@@ -32,11 +32,13 @@ feature_request
 
 ```
 agent_swarm/
-├── main.py           # Entry point / CLI
-├── orchestrator.py   # Loop control logic — the "brain"
-├── agents.py         # All 4 agents (PM, Dev, QA, Reviewer)
-├── models.py         # SwarmState and AgentResult dataclasses
-├── claude_client.py  # Raw Anthropic API wrapper
+├── main.py              # Entry point / CLI
+├── orchestrator.py      # Loop control logic — the "brain"
+├── agents.py            # All 4 agents (PM, Dev, QA, Reviewer)
+├── models.py            # SwarmState and AgentResult dataclasses
+├── claude_client.py     # Raw Anthropic API wrapper
+├── sandbox.py           # Optional Podman-based code execution sandbox
+├── Dockerfile.sandbox   # Container image for sandbox execution
 └── README.md
 ```
 
@@ -49,6 +51,8 @@ agent_swarm/
 | `agents.py` | System prompts + prompt assembly + response parsing for each agent. |
 | `orchestrator.py` | The loop: decides when to advance, retry, or stop. |
 | `main.py` | CLI glue. Passes args, prints summary, dumps history. |
+| `sandbox.py` | Runs generated code in an isolated Podman container. Off by default. |
+| `Dockerfile.sandbox` | Defines the sandbox image with pre-installed packages for generated code. |
 
 ## Setup
 
@@ -68,6 +72,51 @@ python main.py --file request.txt
 # Suppress verbose output
 python main.py --file request.txt --quiet
 ```
+
+## Sandbox (optional)
+
+By default, QA does **static analysis only**. To have QA actually execute the
+generated code, enable the sandbox:
+
+```bash
+# Windows
+winget install RedHat.Podman
+podman machine init
+podman machine start
+
+# Build the sandbox image once (only needed after install or Dockerfile changes)
+podman build -f Dockerfile.sandbox -t swarm-sandbox .
+
+# Then run with sandbox enabled
+SWARM_SANDBOX=true python main.py --request "build a rate limiter"
+```
+
+When `SWARM_SANDBOX=true`, the QA agent:
+1. Writes the generated code to a temp file
+2. Mounts it read-only into a fresh `swarm-sandbox` container
+3. Runs it with no network access, 256MB RAM cap, and a 30s timeout
+4. Passes the real stdout/stderr/exit code back to Claude for review
+5. Treats runtime errors as critical failures
+
+The container is automatically removed after each run. Your machine's
+filesystem is never touched by the generated code.
+
+### Available packages in the sandbox
+
+The Dev agent is told it can only use these packages (plus the standard library):
+
+| Package | Use case |
+|---------|----------|
+| `requests` | HTTP calls |
+| `dnspython` | DNS lookups (e.g. MX record validation) |
+| `pydantic` | Data validation and modelling |
+| `numpy` | Numerical computing |
+| `pandas` | Data manipulation |
+| `httpx` | Async HTTP client |
+| `pytest` | Testing |
+
+To add a package: update `Dockerfile.sandbox`, rebuild the image, and add it
+to the `RUNTIME ENVIRONMENT` section of `DEV_SYSTEM` in `agents.py`.
 
 ## Key Design Decisions
 
@@ -111,9 +160,9 @@ observability, persistence, and async support out of the box.
 1. Add its system prompt + `run()` to `agents.py`
 2. Add a call to it in `orchestrator.py` after the QA pass block
 
-**Add tool use** (e.g. Dev agent actually runs the code):
-1. Give the Dev agent a sandboxed shell (via `subprocess` or E2B)
-2. Pass the execution output into the QA agent's prompt
+**Enable sandbox execution** (QA runs the code, not just static analysis):
+1. Install Podman and set `SWARM_SANDBOX=true` (see Sandbox section above)
+2. Real stdout/stderr/exit codes are passed into the QA agent's prompt
 
 **Parallelize** (e.g. run QA and Security review simultaneously):
 1. Use `asyncio.gather()` with async versions of `call_claude`

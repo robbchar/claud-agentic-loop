@@ -10,8 +10,14 @@ This separation is intentional — it makes each agent independently testable,
 and is exactly what LangGraph would model as individual graph nodes.
 """
 
+import os
+
 from claude_client import call_claude, call_claude_json, call_claude_messages
 from models import SwarmState, AgentResult
+
+# Sandbox is opt-in — set SWARM_SANDBOX=true to enable container execution.
+# If false, QA does static analysis only (no code execution).
+SANDBOX_ENABLED = os.environ.get("SWARM_SANDBOX", "false").lower() == "true"
 
 
 # =============================================================================
@@ -62,6 +68,13 @@ You are a senior software engineer. Write clean, production-quality Python code.
 - Handle edge cases mentioned in requirements
 - If feedback is provided, address every point explicitly
 - Output ONLY the code. No explanation before or after.
+
+RUNTIME ENVIRONMENT:
+Your code runs inside an isolated container. The constraints are:
+- No network access
+- No filesystem access outside of /tmp
+- Available third-party packages: requests, dnspython, pydantic, numpy, pandas, httpx, pytest
+- Only use packages from the list above or the Python standard library
 """
 
 class dev_agent:
@@ -104,14 +117,32 @@ Output a JSON object with this exact shape:
 }
 
 Be strict. Fail if any acceptance criteria are not met or if there are critical bugs.
+If actual execution results are provided, treat runtime errors as critical issues.
 """
 
 class qa_agent:
     @staticmethod
     def run(state: SwarmState) -> AgentResult:
+        # If sandbox is enabled, actually execute the code and include
+        # the real output in the QA prompt. This gives Claude real
+        # runtime behavior rather than just static analysis.
+        execution_block = ""
+        if SANDBOX_ENABLED and state.code:
+            from sandbox import run_in_sandbox
+            print("  Executing code in sandbox...")
+            exec_result = run_in_sandbox(state.code)
+            status = "exited 0 (success)" if exec_result.success else f"exited {exec_result.exit_code} (failure)"
+            execution_block = (
+                f"\n\nACTUAL EXECUTION RESULTS ({status}):\n"
+                f"STDOUT:\n{exec_result.stdout or '(empty)'}\n"
+                f"STDERR:\n{exec_result.stderr or '(empty)'}\n"
+                f"TIMED OUT: {exec_result.timed_out}"
+            )
+
         prompt = (
             f"REQUIREMENTS:\n{state.requirements}\n\n"
             f"CODE TO REVIEW:\n{state.code}"
+            f"{execution_block}"
         )
         result = call_claude_json(QA_SYSTEM, prompt)
 
