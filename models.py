@@ -43,5 +43,8 @@ class SwarmState:
     # Set to True when Reviewer approves
     approved: bool = False
 
+    # Conversation history for multi-turn dev agent (avoids re-sending growing code each iteration)
+    dev_messages: list = field(default_factory=list)
+
     # Full audit trail of every agent call
     history: list = field(default_factory=list)

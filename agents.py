@@ -10,7 +10,7 @@ This separation is intentional — it makes each agent independently testable,
 and is exactly what LangGraph would model as individual graph nodes.
 """
 
-from claude_client import call_claude, call_claude_json
+from claude_client import call_claude, call_claude_json, call_claude_messages
 from models import SwarmState, AgentResult
 
 
@@ -67,15 +67,22 @@ You are a senior software engineer. Write clean, production-quality Python code.
 class dev_agent:
     @staticmethod
     def run(state: SwarmState) -> AgentResult:
-        prompt = f"REQUIREMENTS:\n{state.requirements}"
+        if not state.dev_messages:
+            # First iteration: seed the conversation with requirements
+            state.dev_messages = [{"role": "user", "content": f"REQUIREMENTS:\n{state.requirements}"}]
+        else:
+            # Subsequent iterations: append just the feedback — model already has the code
+            # in its prior assistant turn, so we don't re-send it
+            state.dev_messages.append({
+                "role": "user",
+                "content": f"FEEDBACK TO ADDRESS:\n{state.feedback}",
+            })
 
-        if state.feedback:
-            prompt += f"\n\nPREVIOUS FEEDBACK TO ADDRESS:\n{state.feedback}"
+        code = call_claude_messages(DEV_SYSTEM, state.dev_messages)
 
-        if state.code:
-            prompt += f"\n\nYOUR PREVIOUS CODE (revise this):\n{state.code}"
+        # Store the assistant turn so the next iteration has full context without re-sending code
+        state.dev_messages.append({"role": "assistant", "content": code})
 
-        code = call_claude(DEV_SYSTEM, prompt)
         return AgentResult(output=code, passed=True)
 
 
