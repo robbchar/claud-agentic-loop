@@ -1,0 +1,12 @@
+# Claude Code local settings (user-specific, not shared)
+.claude/settings.local.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Run artifacts
+swarm_run.json
