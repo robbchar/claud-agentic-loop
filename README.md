@@ -55,8 +55,18 @@ agent_swarm/
 ```bash
 pip install anthropic
 export ANTHROPIC_API_KEY=your_key_here
+
+# Use the default built-in request
 python main.py
+
+# Pass a request inline
 python main.py --request "build a JWT auth middleware"
+
+# Read the request from a file
+python main.py --file request.txt
+
+# Suppress verbose output
+python main.py --file request.txt --quiet
 ```
 
 ## Key Design Decisions

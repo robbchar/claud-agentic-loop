@@ -4,11 +4,13 @@ Entry point. Run this to kick off the swarm.
 Usage:
     python main.py
     python main.py --request "build a rate limiter"
-    python main.py --request "build a rate limiter" --max-iter 3
+    python main.py --file request.txt
+    python main.py --file request.txt --quiet
 """
 
 import argparse
 import json
+import sys
 from orchestrator import run_swarm
 
 
@@ -22,12 +24,24 @@ Build a Python function that validates email addresses. It should:
 
 def main():
     parser = argparse.ArgumentParser(description="Run the agent swarm")
-    parser.add_argument("--request", type=str, default=DEFAULT_REQUEST, help="Feature request")
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--request", type=str, help="Feature request as a string")
+    group.add_argument("--file", type=str, help="Path to a file containing the feature request")
     parser.add_argument("--quiet", action="store_true", help="Suppress verbose output")
     args = parser.parse_args()
 
+    if args.file:
+        try:
+            with open(args.file) as f:
+                feature_request = f.read()
+        except FileNotFoundError:
+            print(f"Error: file not found: {args.file}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        feature_request = args.request or DEFAULT_REQUEST
+
     state = run_swarm(
-        feature_request=args.request,
+        feature_request=feature_request,
         verbose=not args.quiet,
     )
 
