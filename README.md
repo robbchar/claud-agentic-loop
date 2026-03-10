@@ -143,6 +143,28 @@ No API calls made.
 Works with any combination of flags — useful for CI pre-checks or before
 spending API credits on a long run.
 
+## Running the tests
+
+```bash
+pip install pytest
+python -m pytest
+```
+
+Tests live alongside the source files they cover (`test_models.py`, `test_agents.py`, etc.). All Claude API calls are mocked — no API key or network access required.
+
+```
+test_models.py      — SwarmState and AgentResult dataclass behaviour
+test_agents.py      — All four agents (PM, Dev, QA, Reviewer) with mocked Claude calls
+test_orchestrator.py — Loop logic: PM skip, iteration count, feedback routing, max iterations
+test_main.py        — CLI flags, file loading, --dry-run, error exits
+```
+
+Run a specific file:
+
+```bash
+python -m pytest test_agents.py -v
+```
+
 ## Sandbox (optional)
 
 By default, QA does **static analysis only**. To have QA actually execute the
