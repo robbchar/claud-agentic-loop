@@ -29,7 +29,11 @@ class SwarmState:
     The shared state object. Think of this as the 'memory' of the pipeline.
     Passed by reference through every agent — agents mutate it via the orchestrator.
     """
-    feature_request: str
+    feature_request: str = ""
+
+    # Spec-driven mode: populated from docs/ARCHITECTURE.md and docs/TASKS.md
+    architecture: str = ""
+    tasks_doc: str = ""
 
     # Artifacts produced by each agent
     requirements: Optional[str] = None

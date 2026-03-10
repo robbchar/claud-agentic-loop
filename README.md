@@ -1,32 +1,41 @@
 # Agent Swarm — Raw Claude API Implementation
 
-A multi-agent pipeline that takes a feature request and iterates through
-requirements → development → QA → code review until the code is approved.
+A multi-agent pipeline that takes a feature request (or existing spec documents)
+and iterates through requirements → development → QA → code review until the
+code is approved.
 
 ## Architecture
 
 ```
-feature_request
-      │
-      ▼
- [PM Agent]          (runs once)
-      │ requirements
-      ▼
- [Dev Agent]  ◄──────────────────┐
-      │ code                     │ feedback
-      ▼                          │
- [QA Agent]                      │
-      │                          │
-      ├── FAIL ──────────────────┘
-      │
-      │ pass
-      ▼
-[Reviewer Agent]
-      │
-      ├── CHANGES REQUESTED ─────┘ (sends feedback back to Dev)
-      │
-      └── APPROVED → done ✅
+feature_request  ──OR──  docs/ARCHITECTURE.md + docs/TASKS.md
+      │                              │
+      └──────────────┬───────────────┘
+                     ▼
+              [PM Agent]          (runs once; skipped if requirements pre-set)
+                     │ requirements
+                     ▼
+              [Dev Agent]  ◄──────────────────┐
+                     │ code                   │ feedback
+                     ▼                        │
+              [QA Agent]                      │
+                     │                        │
+                     ├── FAIL ────────────────┘
+                     │
+                     │ pass
+                     ▼
+           [Reviewer Agent]
+                     │
+                     ├── CHANGES REQUESTED ───┘ (sends feedback back to Dev)
+                     │
+                     └── APPROVED → done ✅
 ```
+
+### Two modes
+
+| Mode | How it works |
+|------|-------------|
+| **Free-form** | Pass a feature request string or file. PM agent generates requirements from scratch. |
+| **Spec-driven** | Pass `--architecture` and `--tasks` docs. PM agent reads the specs and produces structured acceptance criteria per milestone task — no requirements invented. |
 
 ## File Structure
 
@@ -80,6 +89,60 @@ python main.py --file request.txt
 python main.py --file request.txt --quiet
 ```
 
+### Spec-driven mode
+
+Instead of a free-form feature request, point the swarm at your existing
+architecture and task documents. The PM agent will read them and produce
+structured acceptance criteria for each task in the current milestone.
+
+```bash
+# Explicit paths
+python main.py --architecture docs/ARCHITECTURE.md --tasks docs/TASKS.md
+
+# Default paths (docs/ARCHITECTURE.md + docs/TASKS.md) — just drop the files
+# in the right place and run without flags
+python main.py
+```
+
+The PM agent will:
+- Extract the **current milestone** (first milestone with pending tasks)
+- Produce per-task acceptance criteria derived directly from the spec
+- Flag ambiguities as warnings without blocking the pipeline
+- Surface global architecture constraints for the Dev agent
+
+**Expected doc conventions:**
+
+`docs/ARCHITECTURE.md` — Describe the system: tech stack, constraints, module
+boundaries, security requirements.
+
+`docs/TASKS.md` — List tasks grouped by milestone. Mark completed tasks so
+the agent knows which milestone is current. Any format works as long as
+milestones and task IDs are clear.
+
+### Dry-run
+
+Verify that your doc files are found and loaded correctly without making any
+Claude API calls:
+
+```bash
+python main.py --architecture docs/ARCHITECTURE.md --tasks docs/TASKS.md --dry-run
+```
+
+Output example:
+```
+📐 Loaded architecture doc: docs/ARCHITECTURE.md (1842 chars)
+📋 Loaded tasks doc: docs/TASKS.md (743 chars)
+
+--- DRY RUN STATE ---
+feature_request: '\nBuild a Python function that validates email addresses...'
+architecture:    1842 chars loaded
+tasks_doc:       743 chars loaded
+No API calls made.
+```
+
+Works with any combination of flags — useful for CI pre-checks or before
+spending API credits on a long run.
+
 ## Sandbox (optional)
 
 By default, QA does **static analysis only**. To have QA actually execute the
@@ -130,6 +193,15 @@ to the `RUNTIME ENVIRONMENT` section of `DEV_SYSTEM` in `agents.py`.
 ### SwarmState as shared memory
 Every agent receives the full `SwarmState` and reads only what it needs.
 This makes it trivial to add a new agent — it just reads from state, writes back.
+`architecture` and `tasks_doc` fields are populated before `run_swarm()` is
+called, so the PM agent can consume them without any orchestrator changes.
+
+### Spec-driven vs free-form PM agent
+In free-form mode the PM agent invents requirements from a vague prompt.
+In spec-driven mode it reads `state.architecture` and `state.tasks_doc` and
+derives acceptance criteria from existing decisions — no hallucinated scope.
+The orchestrator also skips the PM phase entirely if `state.requirements` is
+already set, which lets callers inject pre-built requirements for testing.
 
 ### Structured JSON outputs from agents
 QA and Reviewer return `{ passed: bool, feedback_for_dev: string }`.

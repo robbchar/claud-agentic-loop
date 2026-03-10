@@ -21,38 +21,68 @@ SANDBOX_ENABLED = os.environ.get("SWARM_SANDBOX", "false").lower() == "true"
 
 
 # =============================================================================
-# PM AGENT — Produces structured requirements from a vague feature request
+# PM AGENT — Spec-driven: reads architecture + task docs and produces structured
+#             acceptance criteria per milestone task
 # =============================================================================
 
 PM_SYSTEM = """
-You are a senior product manager. Your job is to take a feature request and produce
-clear, developer-ready requirements.
+You are a senior product manager working from existing specification documents.
+Your job is NOT to invent requirements — it is to read the provided architecture
+and task documents and produce structured, developer-ready acceptance criteria.
 
-Output a JSON object with this exact shape:
+Rules:
+- Only include tasks from the CURRENT milestone (the first milestone that has
+  pending/incomplete tasks).
+- For each task produce a list of concrete, testable acceptance criteria derived
+  directly from the spec documents.
+- If anything in the spec is ambiguous or contradictory, record it as a warning
+  on the relevant task. Do NOT block or refuse — output what you can.
+- global_constraints should capture cross-cutting concerns from the architecture
+  doc (e.g. language, runtime, security requirements).
+
+Output a JSON object with EXACTLY this shape (no extra keys):
 {
-  "summary": "one sentence description",
-  "acceptance_criteria": ["criterion 1", "criterion 2", ...],
-  "edge_cases": ["edge case 1", ...],
-  "out_of_scope": ["thing 1", ...],
-  "tech_notes": "any relevant implementation constraints or suggestions"
+  "milestone": "milestone name or id",
+  "tasks": [
+    {
+      "id": "task id from the tasks doc",
+      "summary": "one sentence description of the task",
+      "acceptance_criteria": ["criterion 1", "criterion 2"],
+      "warnings": ["ambiguity or gap noted in spec"]
+    }
+  ],
+  "global_constraints": ["constraint 1", "constraint 2"]
 }
 """
 
 class pm_agent:
     @staticmethod
     def run(state: SwarmState) -> AgentResult:
-        prompt = f"Feature request:\n{state.feature_request}"
+        prompt = (
+            f"ARCHITECTURE DOCUMENT:\n{state.architecture}\n\n"
+            f"TASKS DOCUMENT:\n{state.tasks_doc}"
+        )
         result = call_claude_json(PM_SYSTEM, prompt)
-        # Format it nicely for downstream agents
+
+        tasks_text = ""
+        for t in result.get("tasks", []):
+            criteria = "\n".join(f"    - {c}" for c in t.get("acceptance_criteria", []))
+            warnings = "\n".join(f"    ⚠ {w}" for w in t.get("warnings", []))
+            tasks_text += (
+                f"\n  [{t['id']}] {t['summary']}\n"
+                f"  Acceptance criteria:\n{criteria}\n"
+            )
+            if warnings:
+                tasks_text += f"  Warnings:\n{warnings}\n"
+
+        constraints_text = "\n".join(
+            f"  - {c}" for c in result.get("global_constraints", [])
+        ) or "  None"
+
         output = (
-            f"SUMMARY: {result['summary']}\n\n"
-            f"ACCEPTANCE CRITERIA:\n" +
-            "\n".join(f"  - {c}" for c in result["acceptance_criteria"]) +
-            f"\n\nEDGE CASES:\n" +
-            "\n".join(f"  - {e}" for e in result["edge_cases"]) +
-            f"\n\nOUT OF SCOPE:\n" +
-            "\n".join(f"  - {o}" for o in result["out_of_scope"]) +
-            f"\n\nTECH NOTES: {result['tech_notes']}"
+            f"MILESTONE: {result.get('milestone', 'unknown')}\n\n"
+            f"TASKS:{tasks_text}\n"
+            f"GLOBAL CONSTRAINTS:\n{constraints_text}"
         )
         return AgentResult(output=output, passed=True)
 

@@ -13,23 +13,25 @@ from models import SwarmState, AgentResult
 MAX_ITERATIONS = 5
 
 
-def run_swarm(feature_request: str, verbose: bool = True) -> SwarmState:
+def run_swarm(state: SwarmState, verbose: bool = True) -> SwarmState:
     """
-    Main entry point. Takes a feature request string, runs the full pipeline,
+    Main entry point. Accepts a pre-built SwarmState (so callers can populate
+    spec docs or pre-set requirements before running), runs the full pipeline,
     and returns the final state (including all artifacts produced).
     """
-    state = SwarmState(feature_request=feature_request)
-
     def log(msg: str):
         if verbose:
             print(msg)
 
-    # --- Phase 1: Requirements (runs once) ---
-    log("\n🧠 [PM Agent] Generating requirements...")
-    result = pm_agent.run(state)
-    state.requirements = result.output
-    state.history.append({"agent": "pm", "output": result.output})
-    log(f"✅ Requirements done.\n{result.output}\n")
+    # --- Phase 1: Requirements (runs once, unless already populated) ---
+    if state.requirements:
+        log("\n⏭  [PM Agent] Requirements already set — skipping.")
+    else:
+        log("\n🧠 [PM Agent] Generating requirements...")
+        result = pm_agent.run(state)
+        state.requirements = result.output
+        state.history.append({"agent": "pm", "output": result.output})
+        log(f"✅ Requirements done.\n{result.output}\n")
 
     # --- Phase 2: Dev → QA → Reviewer loop ---
     for iteration in range(1, MAX_ITERATIONS + 1):
