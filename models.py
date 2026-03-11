@@ -35,6 +35,10 @@ class SwarmState:
     architecture: str = ""
     tasks_doc: str = ""
 
+    # Project discovery: populated by scout before run_swarm()
+    project_context: str = ""
+    output_dir: str = "."
+
     # Artifacts produced by each agent
     requirements: Optional[str] = None
     code: Optional[str] = None

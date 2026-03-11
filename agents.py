@@ -92,14 +92,27 @@ class pm_agent:
 # =============================================================================
 
 DEV_SYSTEM = """
-You are a senior software engineer. Write clean, production-quality Python code.
+You are a senior software engineer. Write clean, production-quality code.
 
 - Include docstrings and type hints
 - Handle edge cases mentioned in requirements
 - If feedback is provided, address every point explicitly
-- Output ONLY the code. No explanation before or after.
 
-RUNTIME ENVIRONMENT:
+FILE OUTPUT FORMAT:
+You MUST wrap every file you generate in a separator line using this exact format:
+
+--- FILE: relative/path/to/file.ext ---
+<file contents>
+
+Use paths relative to the project root. Generate ALL files needed to fulfil
+the requirements. Do not output any text outside of FILE blocks.
+
+If existing file contents are provided in the project context, read them
+carefully — update or extend them rather than rewriting from scratch where
+appropriate. If a file needs to be replaced entirely, output the full new
+contents inside its FILE block.
+
+RUNTIME ENVIRONMENT (when no project context is provided):
 Your code runs inside an isolated container. The constraints are:
 - No network access
 - No filesystem access outside of /tmp
@@ -111,8 +124,11 @@ class dev_agent:
     @staticmethod
     def run(state: SwarmState) -> AgentResult:
         if not state.dev_messages:
-            # First iteration: seed the conversation with requirements
-            state.dev_messages = [{"role": "user", "content": f"REQUIREMENTS:\n{state.requirements}"}]
+            # First iteration: seed the conversation with requirements (+ project context)
+            user_content = f"REQUIREMENTS:\n{state.requirements}"
+            if state.project_context:
+                user_content += f"\n\nPROJECT CONTEXT:\n{state.project_context}"
+            state.dev_messages = [{"role": "user", "content": user_content}]
         else:
             # Subsequent iterations: append just the feedback — model already has the code
             # in its prior assistant turn, so we don't re-send it

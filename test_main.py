@@ -11,6 +11,9 @@ from models import SwarmState
 # Helpers
 # ---------------------------------------------------------------------------
 
+FAKE_PROJECT_CONTEXT = "PROJECT CONTEXT\n========\nFramework : Unknown\n"
+
+
 def _fake_run_swarm(captured: dict):
     """Returns a run_swarm side_effect that captures the state passed to it."""
     def _side_effect(state: SwarmState, verbose: bool = True) -> SwarmState:
@@ -18,6 +21,11 @@ def _fake_run_swarm(captured: dict):
         state.history = []
         return state
     return _side_effect
+
+
+def _scan_noop(*args, **kwargs) -> str:
+    """Stub for scan_project — avoids real filesystem scan and stdin prompts."""
+    return FAKE_PROJECT_CONTEXT
 
 
 def _call_main(argv: list[str], extra_patches: list = ()):
@@ -161,6 +169,7 @@ class TestSpecDocLoading:
         import main as m
         with (
             patch("main.run_swarm", side_effect=_fake_run_swarm(captured)),
+            patch("main.scan_project", _scan_noop),
             patch("main.json.dump"),
             patch("sys.argv", ["main.py",
                                "--architecture", str(arch),
@@ -170,6 +179,36 @@ class TestSpecDocLoading:
 
         assert captured["state"].architecture == "arch content"
         assert captured["state"].tasks_doc == "tasks content"
+
+    def test_project_context_populated_on_state(self, tmp_path):
+        captured = {}
+        import main as m
+        with (
+            patch("main.run_swarm", side_effect=_fake_run_swarm(captured)),
+            patch("main.scan_project", return_value=FAKE_PROJECT_CONTEXT),
+            patch("main.DEFAULT_ARCHITECTURE_PATH", str(tmp_path / "missing.md")),
+            patch("main.DEFAULT_TASKS_PATH", str(tmp_path / "missing2.md")),
+            patch("main.json.dump"),
+            patch("sys.argv", ["main.py"]),
+        ):
+            m.main()
+
+        assert captured["state"].project_context == FAKE_PROJECT_CONTEXT
+
+    def test_output_dir_passed_to_state(self, tmp_path):
+        captured = {}
+        import main as m
+        with (
+            patch("main.run_swarm", side_effect=_fake_run_swarm(captured)),
+            patch("main.scan_project", _scan_noop),
+            patch("main.DEFAULT_ARCHITECTURE_PATH", str(tmp_path / "missing.md")),
+            patch("main.DEFAULT_TASKS_PATH", str(tmp_path / "missing2.md")),
+            patch("main.json.dump"),
+            patch("sys.argv", ["main.py", "--output-dir", str(tmp_path)]),
+        ):
+            m.main()
+
+        assert captured["state"].output_dir == str(tmp_path)
 
     def test_missing_explicit_architecture_exits_with_error(self, tmp_path):
         import main as m
@@ -196,6 +235,7 @@ class TestSpecDocLoading:
         import main as m
         with (
             patch("main.run_swarm", side_effect=_fake_run_swarm(captured)),
+            patch("main.scan_project", _scan_noop),
             patch("main.DEFAULT_ARCHITECTURE_PATH", str(tmp_path / "missing.md")),
             patch("main.DEFAULT_TASKS_PATH", str(tmp_path / "missing2.md")),
             patch("main.json.dump"),
@@ -216,6 +256,7 @@ class TestSpecDocLoading:
         import main as m
         with (
             patch("main.run_swarm", side_effect=_fake_run_swarm(captured)),
+            patch("main.scan_project", _scan_noop),
             patch("main.DEFAULT_ARCHITECTURE_PATH", str(arch)),
             patch("main.DEFAULT_TASKS_PATH", str(tasks)),
             patch("main.json.dump"),
@@ -237,6 +278,7 @@ class TestFeatureRequestSourcing:
         import main as m
         with (
             patch("main.run_swarm", side_effect=_fake_run_swarm(captured)),
+            patch("main.scan_project", _scan_noop),
             patch("main.DEFAULT_ARCHITECTURE_PATH", str(tmp_path / "missing.md")),
             patch("main.DEFAULT_TASKS_PATH", str(tmp_path / "missing2.md")),
             patch("main.json.dump"),
@@ -254,6 +296,7 @@ class TestFeatureRequestSourcing:
         import main as m
         with (
             patch("main.run_swarm", side_effect=_fake_run_swarm(captured)),
+            patch("main.scan_project", _scan_noop),
             patch("main.DEFAULT_ARCHITECTURE_PATH", str(tmp_path / "missing.md")),
             patch("main.DEFAULT_TASKS_PATH", str(tmp_path / "missing2.md")),
             patch("main.json.dump"),
@@ -268,6 +311,7 @@ class TestFeatureRequestSourcing:
         import main as m
         with (
             patch("main.run_swarm", side_effect=_fake_run_swarm(captured)),
+            patch("main.scan_project", _scan_noop),
             patch("main.DEFAULT_ARCHITECTURE_PATH", str(tmp_path / "missing.md")),
             patch("main.DEFAULT_TASKS_PATH", str(tmp_path / "missing2.md")),
             patch("main.json.dump"),

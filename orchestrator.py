@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 from agents import pm_agent, dev_agent, qa_agent, reviewer_agent
 from models import SwarmState, AgentResult
+from writer import write_files
 
 
 MAX_ITERATIONS = 5
@@ -69,6 +70,13 @@ def run_swarm(state: SwarmState, verbose: bool = True) -> SwarmState:
             log(f"\n🎉 Code approved after {iteration} iteration(s)! Ready for PR.")
             state.approved = True
             state.feedback = None
+            written = write_files(state.code, state.output_dir)
+            if written:
+                log(f"\n[writer] Wrote {len(written)} file(s):")
+                for path in written:
+                    log(f"  {path}")
+            else:
+                log("\n[writer] No FILE blocks found in output — code printed above only.")
             break
         else:
             log(f"🔄 Reviewer requested changes. Sending feedback to Dev agent.")
