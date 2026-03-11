@@ -11,7 +11,10 @@ Spec-driven mode (reads docs instead of a free-form request):
     python main.py --architecture docs/ARCHITECTURE.md --tasks docs/TASKS.md
     python main.py  # uses default paths docs/ARCHITECTURE.md + docs/TASKS.md if they exist
 
-Dry-run (verify file loading without calling the Claude API):
+Write output to a specific directory (defaults to current directory):
+    python main.py --output-dir ../my-project
+
+Dry-run (verify file loading and project discovery without calling the Claude API):
     python main.py --architecture docs/ARCHITECTURE.md --tasks docs/TASKS.md --dry-run
 """
 
@@ -21,6 +24,7 @@ import os
 import sys
 from models import SwarmState
 from orchestrator import run_swarm
+from scout import scan_project
 
 
 DEFAULT_REQUEST = """
@@ -60,11 +64,17 @@ def main():
         default=None,
         help=f"Path to tasks doc for spec-driven mode (default: {DEFAULT_TASKS_PATH})",
     )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default=".",
+        help="Directory to write generated files into (default: current directory)",
+    )
     parser.add_argument("--quiet", action="store_true", help="Suppress verbose output")
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Load and print state then exit without calling the Claude API",
+        help="Load state and scan project, then exit without calling the Claude API",
     )
     args = parser.parse_args()
 
@@ -82,7 +92,7 @@ def main():
             sys.exit(1)
         print(f"Sandbox: {msg}")
 
-    state = SwarmState(feature_request=feature_request)
+    state = SwarmState(feature_request=feature_request, output_dir=args.output_dir)
 
     # Populate spec docs. Explicit flags always load (error if missing).
     # Default paths are loaded silently only if the file exists.
@@ -103,30 +113,46 @@ def main():
         state.tasks_doc = _read_file(DEFAULT_TASKS_PATH, "--tasks")
         print(f"[spec] Loaded tasks doc: {DEFAULT_TASKS_PATH} ({len(state.tasks_doc)} chars)")
 
+    # Project discovery — scan the output directory so the Dev agent knows
+    # what it's writing into. Interactive prompts for large files unless dry-run.
+    print(f"\n[scout] Scanning project: {os.path.abspath(args.output_dir)}")
+    state.project_context = scan_project(
+        args.output_dir,
+        interactive=not args.dry_run,
+    )
+    # Print just the framework line so the user gets quick feedback
+    for line in state.project_context.splitlines():
+        if line.startswith("Framework"):
+            print(f"[scout] {line}")
+            break
+
     if args.dry_run:
         print("\n--- DRY RUN STATE ---")
-        print(f"feature_request: {state.feature_request[:120]!r}{'...' if len(state.feature_request) > 120 else ''}")
-        print(f"architecture:    {len(state.architecture)} chars loaded" if state.architecture else "architecture:    (not loaded)")
-        print(f"tasks_doc:       {len(state.tasks_doc)} chars loaded" if state.tasks_doc else "tasks_doc:       (not loaded)")
+        print(f"feature_request:  {state.feature_request[:120]!r}{'...' if len(state.feature_request) > 120 else ''}")
+        print(f"architecture:     {len(state.architecture)} chars loaded" if state.architecture else "architecture:     (not loaded)")
+        print(f"tasks_doc:        {len(state.tasks_doc)} chars loaded" if state.tasks_doc else "tasks_doc:        (not loaded)")
+        print(f"project_context:  {len(state.project_context)} chars loaded")
+        print(f"output_dir:       {os.path.abspath(state.output_dir)}")
         print("No API calls made.")
         return
 
     state = run_swarm(state=state, verbose=not args.quiet)
 
-    print("\n" + "="*50)
+    print("\n" + "=" * 50)
     print("FINAL STATE SUMMARY")
-    print("="*50)
-    print(f"Approved: {state.approved}")
+    print("=" * 50)
+    print(f"Approved:   {state.approved}")
     print(f"Iterations: {len([h for h in state.history if h['agent'] == 'dev'])}")
 
-    if state.approved and state.code:
+    if state.approved and state.code and not state.code.strip().startswith("--- FILE:"):
+        # Only print raw code if it wasn't already written to files
         print("\n--- FINAL CODE ---")
         print(state.code)
 
     # Dump full history to file for inspection
     with open("swarm_run.json", "w") as f:
         json.dump(state.history, f, indent=2)
-    print("\n📄 Full history written to swarm_run.json")
+    print("\nFull history written to swarm_run.json")
 
 
 if __name__ == "__main__":
