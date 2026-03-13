@@ -93,16 +93,18 @@ def _run(cmd: list[str], label: str = "agent", spinner=None) -> str:
     reader = threading.Thread(target=_stream, daemon=True)
     reader.start()
 
+    # Poll instead of blocking wait() so Ctrl+C is handled promptly on Windows.
     try:
-        proc.wait(timeout=_TIMEOUT)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        reader.join(timeout=2)
-        elapsed = time.monotonic() - start
-        raise RuntimeError(
-            f"claude subprocess timed out after {elapsed:.0f}s "
-            f"(SWARM_CC_TIMEOUT={_TIMEOUT})"
-        )
+        while proc.poll() is None:
+            elapsed = time.monotonic() - start
+            if elapsed > _TIMEOUT:
+                proc.kill()
+                reader.join(timeout=2)
+                raise RuntimeError(
+                    f"claude subprocess timed out after {elapsed:.0f}s "
+                    f"(SWARM_CC_TIMEOUT={_TIMEOUT})"
+                )
+            time.sleep(0.1)
     except KeyboardInterrupt:
         print(f"\n\n⛔  Interrupted — killing [{label}] subprocess...", flush=True)
         proc.kill()

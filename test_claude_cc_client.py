@@ -87,7 +87,9 @@ def _make_popen_mock(output: str = "response text", returncode: int = 0, stderr_
     proc.stdout.read.side_effect = chunks
     proc.returncode = returncode
     proc.stderr.read.return_value = stderr_text
-    proc.wait.return_value = None
+    # poll() returns None while running, then returncode when done.
+    # We simulate "already finished" so the polling loop exits immediately.
+    proc.poll.return_value = returncode
     return proc
 
 
@@ -108,10 +110,12 @@ def test_run_raises_on_nonzero_exit(mock_popen):
 @patch("claude_cc_client.subprocess.Popen")
 def test_run_raises_on_timeout(mock_popen):
     proc = _make_popen_mock()
-    proc.wait.side_effect = subprocess.TimeoutExpired(cmd="claude", timeout=1)
+    # poll() keeps returning None so the timeout loop fires
+    proc.poll.return_value = None
     mock_popen.return_value = proc
-    with pytest.raises(RuntimeError, match="timed out"):
-        _run(["claude", "-p", "test"])
+    with patch("claude_cc_client._TIMEOUT", 0):
+        with pytest.raises(RuntimeError, match="timed out"):
+            _run(["claude", "-p", "test"])
     proc.kill.assert_called_once()
 
 
