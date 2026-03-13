@@ -34,6 +34,10 @@ class Spinner:
         print(f"\r{' ' * width}\r", end="", flush=True)
 
     def __enter__(self) -> "Spinner":
+        # Print any leading newline once so it doesn't repeat on every frame
+        if self.message.startswith("\n"):
+            print()
+            self.message = self.message.lstrip("\n")
         self._thread.start()
         return self
 
