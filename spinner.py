@@ -13,7 +13,7 @@ import time
 
 
 class Spinner:
-    _FRAMES = [".", "..", "..."]
+    _FRAMES = [".  ", ".. ", "..."]
 
     def __init__(self, message: str, interval: float = 0.5):
         self.message = message
