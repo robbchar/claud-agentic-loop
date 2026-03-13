@@ -18,15 +18,18 @@ The file writer boundary (writer.py) stays the only path to disk.
 
 Environment variables
 ---------------------
-SWARM_CC_AGENTS : comma-separated list of agents that use this client.
-                  Default: "dev,qa"
-                  Example override: SWARM_CC_AGENTS=dev,qa,reviewer
-                  Set to empty string to disable for all agents.
+SWARM_CC_AGENTS   : comma-separated list of agents that use this client.
+                    Default: "dev,qa"
+                    Example override: SWARM_CC_AGENTS=dev,qa,reviewer
+                    Set to empty string to disable for all agents.
+SWARM_CC_TIMEOUT  : seconds before a subprocess call is killed (default: 300).
 """
 
 import json
+import os
 import subprocess
-import sys
+import threading
+import time
 
 
 # Tools each agent is allowed to use. Restricting to specific MCP namespaces
@@ -53,18 +56,70 @@ def _build_cmd(
     return cmd
 
 
-def _run(cmd: list[str]) -> str:
-    result = subprocess.run(
+_TIMEOUT = int(os.environ.get("SWARM_CC_TIMEOUT", "300"))
+
+
+def _run(cmd: list[str], label: str = "agent", spinner=None) -> str:
+    """
+    Run `claude -p` and stream its stdout to the terminal in real time
+    while also collecting it for the return value. Kills the process and
+    raises RuntimeError if it exceeds _TIMEOUT seconds.
+
+    If a Spinner is passed, it is cleared as soon as the first output chunk
+    arrives so streaming output is not interleaved with the spinner.
+    """
+    proc = subprocess.Popen(
         cmd,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
         encoding="utf-8",
     )
-    if result.returncode != 0:
+
+    collected: list[str] = []
+    start = time.monotonic()
+    _first = True
+
+    def _stream() -> None:
+        nonlocal _first
+        assert proc.stdout is not None
+        for chunk in iter(lambda: proc.stdout.read(64), ""):
+            if _first and spinner is not None:
+                spinner.clear()
+                _first = False
+            collected.append(chunk)
+            print(chunk, end="", flush=True)
+
+    reader = threading.Thread(target=_stream, daemon=True)
+    reader.start()
+
+    try:
+        proc.wait(timeout=_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        reader.join(timeout=2)
+        elapsed = time.monotonic() - start
         raise RuntimeError(
-            f"claude subprocess exited {result.returncode}:\n{result.stderr.strip()}"
+            f"claude subprocess timed out after {elapsed:.0f}s "
+            f"(SWARM_CC_TIMEOUT={_TIMEOUT})"
         )
-    return result.stdout.strip()
+    except KeyboardInterrupt:
+        print(f"\n\n⛔  Interrupted — killing [{label}] subprocess...", flush=True)
+        proc.kill()
+        reader.join(timeout=2)
+        raise
+
+    reader.join()
+    elapsed = time.monotonic() - start
+    print(f"\n  ⏱  [{label}] finished in {elapsed:.1f}s", flush=True)
+
+    if proc.returncode != 0:
+        assert proc.stderr is not None
+        raise RuntimeError(
+            f"claude subprocess exited {proc.returncode}:\n{proc.stderr.read().strip()}"
+        )
+
+    return "".join(collected).strip()
 
 
 def call_claude_cc(
@@ -72,6 +127,7 @@ def call_claude_cc(
     user_message: str,
     agent_name: str,
     expect_json: bool = False,
+    spinner=None,
 ) -> str:
     """
     Single-turn call via `claude -p`. Returns the text response.
@@ -89,7 +145,7 @@ def call_claude_cc(
 
     allowed = AGENT_ALLOWED_TOOLS.get(agent_name, [])
     cmd = _build_cmd(system_prompt, user_message, allowed)
-    text = _run(cmd)
+    text = _run(cmd, label=agent_name, spinner=spinner)
 
     if expect_json:
         text = text.strip()
@@ -105,6 +161,7 @@ def call_claude_cc_messages(
     system_prompt: str,
     messages: list[dict],
     agent_name: str,
+    spinner=None,
 ) -> str:
     """
     Multi-turn variant. Flattens the messages list into a single prompt string
@@ -117,16 +174,17 @@ def call_claude_cc_messages(
         parts.append(f"[{label}]\n{m['content']}")
     user_message = "\n\n---\n\n".join(parts)
 
-    return call_claude_cc(system_prompt, user_message, agent_name, expect_json=False)
+    return call_claude_cc(system_prompt, user_message, agent_name, expect_json=False, spinner=spinner)
 
 
 def call_claude_cc_json(
     system_prompt: str,
     user_message: str,
     agent_name: str,
+    spinner=None,
 ) -> dict:
     """Convenience wrapper that returns a parsed dict."""
-    raw = call_claude_cc(system_prompt, user_message, agent_name, expect_json=True)
+    raw = call_claude_cc(system_prompt, user_message, agent_name, expect_json=True, spinner=spinner)
     try:
         return json.loads(raw)
     except json.JSONDecodeError as e:

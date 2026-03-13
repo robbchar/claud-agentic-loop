@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 from agents import pm_agent, dev_agent, qa_agent, reviewer_agent
 from models import SwarmState, AgentResult
+from spinner import Spinner
 from writer import write_files
 
 
@@ -28,8 +29,8 @@ def run_swarm(state: SwarmState, verbose: bool = True) -> SwarmState:
     if state.requirements:
         log("\n⏭  [PM Agent] Requirements already set — skipping.")
     else:
-        log("\n🧠 [PM Agent] Generating requirements...")
-        result = pm_agent.run(state)
+        with Spinner("\n🧠 [PM Agent] Generating requirements"):
+            result = pm_agent.run(state)
         state.requirements = result.output
         state.history.append({"agent": "pm", "output": result.output})
         log(f"✅ Requirements done.\n{result.output}\n")
@@ -41,15 +42,15 @@ def run_swarm(state: SwarmState, verbose: bool = True) -> SwarmState:
         log(f"{'='*50}")
 
         # Dev
-        log("\n💻 [Dev Agent] Writing code...")
-        result = dev_agent.run(state)
+        with Spinner("\n💻 [Dev Agent] Writing code") as sp:
+            result = dev_agent.run(state, spinner=sp)
         state.code = result.output
         state.history.append({"agent": "dev", "iteration": iteration, "output": result.output})
         log(f"✅ Code written.\n{result.output}\n")
 
         # QA
-        log("\n🧪 [QA Agent] Testing code...")
-        result = qa_agent.run(state)
+        with Spinner("\n🧪 [QA Agent] Testing code") as sp:
+            result = qa_agent.run(state, spinner=sp)
         state.qa_report = result.output
         state.history.append({"agent": "qa", "iteration": iteration, "output": result.output})
         log(f"✅ QA report:\n{result.output}\n")
@@ -60,8 +61,8 @@ def run_swarm(state: SwarmState, verbose: bool = True) -> SwarmState:
             continue  # loop back to Dev with QA feedback
 
         # Reviewer (only if QA passed)
-        log("\n🔍 [Reviewer Agent] Reviewing code...")
-        result = reviewer_agent.run(state)
+        with Spinner("\n🔍 [Reviewer Agent] Reviewing code") as sp:
+            result = reviewer_agent.run(state, spinner=sp)
         state.review = result.output
         state.history.append({"agent": "reviewer", "iteration": iteration, "output": result.output})
         log(f"✅ Review:\n{result.output}\n")

@@ -135,7 +135,7 @@ Your code runs inside an isolated container. The constraints are:
 
 class dev_agent:
     @staticmethod
-    def run(state: SwarmState) -> AgentResult:
+    def run(state: SwarmState, spinner=None) -> AgentResult:
         if not state.dev_messages:
             # First iteration: seed the conversation with requirements (+ project context)
             user_content = f"REQUIREMENTS:\n{state.requirements}"
@@ -151,7 +151,7 @@ class dev_agent:
             })
 
         if _use_cc("dev"):
-            code = call_claude_cc_messages(DEV_SYSTEM, state.dev_messages, "dev")
+            code = call_claude_cc_messages(DEV_SYSTEM, state.dev_messages, "dev", spinner=spinner)
         else:
             code = call_claude_messages(DEV_SYSTEM, state.dev_messages)
 
@@ -184,7 +184,7 @@ If actual execution results are provided, treat runtime errors as critical issue
 
 class qa_agent:
     @staticmethod
-    def run(state: SwarmState) -> AgentResult:
+    def run(state: SwarmState, spinner=None) -> AgentResult:
         # If sandbox is enabled, actually execute the code and include
         # the real output in the QA prompt. This gives Claude real
         # runtime behavior rather than just static analysis.
@@ -207,7 +207,7 @@ class qa_agent:
             f"{execution_block}"
         )
         if _use_cc("qa"):
-            result = call_claude_cc_json(QA_SYSTEM, prompt, "qa")
+            result = call_claude_cc_json(QA_SYSTEM, prompt, "qa", spinner=spinner)
         else:
             result = call_claude_json(QA_SYSTEM, prompt)
 
@@ -254,14 +254,14 @@ Output a JSON object with this exact shape:
 
 class reviewer_agent:
     @staticmethod
-    def run(state: SwarmState) -> AgentResult:
+    def run(state: SwarmState, spinner=None) -> AgentResult:
         prompt = (
             f"REQUIREMENTS:\n{state.requirements}\n\n"
             f"QA REPORT:\n{state.qa_report}\n\n"
             f"CODE TO REVIEW:\n{state.code}"
         )
         if _use_cc("reviewer"):
-            result = call_claude_cc_json(REVIEWER_SYSTEM, prompt, "reviewer")
+            result = call_claude_cc_json(REVIEWER_SYSTEM, prompt, "reviewer", spinner=spinner)
         else:
             result = call_claude_json(REVIEWER_SYSTEM, prompt)
 

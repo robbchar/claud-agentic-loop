@@ -1,7 +1,8 @@
 """Tests for claude_cc_client.py — subprocess wrapper for `claude -p`."""
 
 import json
-from unittest.mock import MagicMock, patch
+import subprocess
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -9,6 +10,7 @@ import claude_cc_client
 from claude_cc_client import (
     AGENT_ALLOWED_TOOLS,
     _build_cmd,
+    _run,
     call_claude_cc,
     call_claude_cc_json,
     call_claude_cc_messages,
@@ -75,38 +77,65 @@ def test_pm_gets_no_tools():
 
 
 # ---------------------------------------------------------------------------
-# call_claude_cc — happy path
+# _run — Popen-level tests
 # ---------------------------------------------------------------------------
 
-def _make_proc(stdout="response text", returncode=0, stderr=""):
+def _make_popen_mock(output: str = "response text", returncode: int = 0, stderr_text: str = "") -> MagicMock:
+    """Build a mock Popen process that streams `output` in 64-byte chunks."""
+    chunks = [output[i:i + 64] for i in range(0, max(len(output), 1), 64)] + [""]
     proc = MagicMock()
-    proc.stdout = stdout
+    proc.stdout.read.side_effect = chunks
     proc.returncode = returncode
-    proc.stderr = stderr
+    proc.stderr.read.return_value = stderr_text
+    proc.wait.return_value = None
     return proc
 
 
-@patch("claude_cc_client.subprocess.run")
-def test_call_claude_cc_returns_stdout(mock_run):
-    mock_run.return_value = _make_proc(stdout="  hello world  ")
+@patch("claude_cc_client.subprocess.Popen")
+def test_run_returns_stripped_output(mock_popen):
+    mock_popen.return_value = _make_popen_mock(output="  hello world  ")
+    result = _run(["claude", "-p", "test"], label="dev")
+    assert result == "hello world"
+
+
+@patch("claude_cc_client.subprocess.Popen")
+def test_run_raises_on_nonzero_exit(mock_popen):
+    mock_popen.return_value = _make_popen_mock(returncode=1, stderr_text="bad things")
+    with pytest.raises(RuntimeError, match="exited 1"):
+        _run(["claude", "-p", "test"])
+
+
+@patch("claude_cc_client.subprocess.Popen")
+def test_run_raises_on_timeout(mock_popen):
+    proc = _make_popen_mock()
+    proc.wait.side_effect = subprocess.TimeoutExpired(cmd="claude", timeout=1)
+    mock_popen.return_value = proc
+    with pytest.raises(RuntimeError, match="timed out"):
+        _run(["claude", "-p", "test"])
+    proc.kill.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# call_claude_cc — happy path (mock _run directly)
+# ---------------------------------------------------------------------------
+
+@patch("claude_cc_client._run", return_value="hello world")
+def test_call_claude_cc_returns_output(mock_run):
     result = call_claude_cc("sys", "msg", "dev")
     assert result == "hello world"
 
 
-@patch("claude_cc_client.subprocess.run")
+@patch("claude_cc_client._run", return_value="")
 def test_call_claude_cc_passes_correct_agent_tools(mock_run):
-    mock_run.return_value = _make_proc()
     call_claude_cc("sys", "msg", "dev")
     cmd = mock_run.call_args[0][0]
     idx = cmd.index("--allowedTools")
-    # dev gets both chrome devtools and context7
     assert "mcp__chrome-devtools__*" in cmd[idx + 1:]
     assert "mcp__context7__*" in cmd[idx + 1:]
 
 
-@patch("claude_cc_client.subprocess.run")
+@patch("claude_cc_client._run", return_value="")
 def test_call_claude_cc_unknown_agent_gets_no_tools(mock_run):
-    mock_run.return_value = _make_proc()
     call_claude_cc("sys", "msg", "unknown_agent")
     cmd = mock_run.call_args[0][0]
     idx = cmd.index("--allowedTools")
@@ -117,48 +146,32 @@ def test_call_claude_cc_unknown_agent_gets_no_tools(mock_run):
 # call_claude_cc — JSON stripping
 # ---------------------------------------------------------------------------
 
-@patch("claude_cc_client.subprocess.run")
+@patch("claude_cc_client._run", return_value='```json\n{"key": "val"}\n```')
 def test_call_claude_cc_strips_json_fences(mock_run):
-    raw = '```json\n{"key": "val"}\n```'
-    mock_run.return_value = _make_proc(stdout=raw)
     result = call_claude_cc("sys", "msg", "qa", expect_json=True)
     assert result == '{"key": "val"}'
 
 
-@patch("claude_cc_client.subprocess.run")
+@patch("claude_cc_client._run", return_value='{"key": "val"}')
 def test_call_claude_cc_plain_json_unchanged(mock_run):
-    raw = '{"key": "val"}'
-    mock_run.return_value = _make_proc(stdout=raw)
     result = call_claude_cc("sys", "msg", "qa", expect_json=True)
     assert result == '{"key": "val"}'
-
-
-# ---------------------------------------------------------------------------
-# call_claude_cc — error handling
-# ---------------------------------------------------------------------------
-
-@patch("claude_cc_client.subprocess.run")
-def test_call_claude_cc_raises_on_nonzero_exit(mock_run):
-    mock_run.return_value = _make_proc(returncode=1, stderr="something went wrong")
-    with pytest.raises(RuntimeError, match="exited 1"):
-        call_claude_cc("sys", "msg", "dev")
 
 
 # ---------------------------------------------------------------------------
 # call_claude_cc_json
 # ---------------------------------------------------------------------------
 
-@patch("claude_cc_client.subprocess.run")
+@patch("claude_cc_client._run")
 def test_call_claude_cc_json_returns_dict(mock_run):
     payload = {"passed": True, "summary": "ok", "issues": []}
-    mock_run.return_value = _make_proc(stdout=json.dumps(payload))
+    mock_run.return_value = json.dumps(payload)
     result = call_claude_cc_json("sys", "msg", "qa")
     assert result == payload
 
 
-@patch("claude_cc_client.subprocess.run")
+@patch("claude_cc_client._run", return_value="not json at all")
 def test_call_claude_cc_json_raises_on_invalid_json(mock_run):
-    mock_run.return_value = _make_proc(stdout="not json at all")
     with pytest.raises(ValueError, match="invalid JSON"):
         call_claude_cc_json("sys", "msg", "qa")
 
@@ -167,9 +180,8 @@ def test_call_claude_cc_json_raises_on_invalid_json(mock_run):
 # call_claude_cc_messages — flattening
 # ---------------------------------------------------------------------------
 
-@patch("claude_cc_client.subprocess.run")
+@patch("claude_cc_client._run", return_value="response")
 def test_call_claude_cc_messages_flattens_conversation(mock_run):
-    mock_run.return_value = _make_proc(stdout="response")
     messages = [
         {"role": "user", "content": "write me a function"},
         {"role": "assistant", "content": "def foo(): pass"},
@@ -191,20 +203,16 @@ def test_call_claude_cc_messages_flattens_conversation(mock_run):
 # ---------------------------------------------------------------------------
 
 def test_cc_agents_default_includes_dev_and_qa():
-    # Default should be dev and qa; reload with no override
-    with patch.dict("os.environ", {}, clear=False):
-        # Re-evaluate the module-level constant with default env
-        import importlib
-        # Patch the env to the default value explicitly
-        with patch.dict("os.environ", {"SWARM_CC_AGENTS": "dev,qa"}):
-            importlib.reload(claude_cc_client)
-            import agents
-            importlib.reload(agents)
-            from agents import CC_AGENTS
-            assert "dev" in CC_AGENTS
-            assert "qa" in CC_AGENTS
-            assert "pm" not in CC_AGENTS
-            assert "reviewer" not in CC_AGENTS
+    import importlib
+    with patch.dict("os.environ", {"SWARM_CC_AGENTS": "dev,qa"}):
+        importlib.reload(claude_cc_client)
+        import agents
+        importlib.reload(agents)
+        from agents import CC_AGENTS
+        assert "dev" in CC_AGENTS
+        assert "qa" in CC_AGENTS
+        assert "pm" not in CC_AGENTS
+        assert "reviewer" not in CC_AGENTS
 
 
 def test_cc_agents_empty_string_disables_all():

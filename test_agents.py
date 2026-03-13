@@ -106,7 +106,7 @@ class TestDevAgent:
         state.requirements = "Build X"
         snapshots = []
 
-        def capture(system, messages, agent_name):
+        def capture(system, messages, agent_name, spinner=None):
             snapshots.append(list(messages))  # copy before the assistant turn is appended
             return "def foo(): pass"
 
@@ -139,7 +139,7 @@ class TestDevAgent:
         state.feedback = "Add error handling"
         snapshots = []
 
-        def capture(system, messages, agent_name):
+        def capture(system, messages, agent_name, spinner=None):
             snapshots.append(list(messages))  # copy before the assistant turn is appended
             return "def foo(): raise ..."
 

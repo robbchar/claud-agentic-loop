@@ -134,7 +134,7 @@ class TestRunSwarmLoop:
         qa_results = [_make_qa_fail("fix X"), _make_qa_pass()]
         captured_feedback = []
 
-        def dev_side_effect(s):
+        def dev_side_effect(s, spinner=None):
             captured_feedback.append(s.feedback)
             return _make_dev_result()
 
