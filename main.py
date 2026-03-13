@@ -40,7 +40,7 @@ DEFAULT_TASKS_PATH = "docs/TASKS.md"
 
 def _read_file(path: str, label: str) -> str:
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             return f.read()
     except FileNotFoundError:
         print(f"Error: {label} file not found: {path}", file=sys.stderr)
