@@ -54,8 +54,10 @@ def test_build_cmd_multiple_tools():
 # AGENT_ALLOWED_TOOLS defaults
 # ---------------------------------------------------------------------------
 
-def test_dev_only_gets_context7():
-    assert AGENT_ALLOWED_TOOLS["dev"] == ["mcp__context7__*"]
+def test_dev_gets_chrome_and_context7():
+    tools = AGENT_ALLOWED_TOOLS["dev"]
+    assert "mcp__chrome-devtools__*" in tools
+    assert "mcp__context7__*" in tools
 
 
 def test_qa_gets_chrome_and_context7():
@@ -97,7 +99,9 @@ def test_call_claude_cc_passes_correct_agent_tools(mock_run):
     call_claude_cc("sys", "msg", "dev")
     cmd = mock_run.call_args[0][0]
     idx = cmd.index("--allowedTools")
-    assert cmd[idx + 1] == "mcp__context7__*"
+    # dev gets both chrome devtools and context7
+    assert "mcp__chrome-devtools__*" in cmd[idx + 1:]
+    assert "mcp__context7__*" in cmd[idx + 1:]
 
 
 @patch("claude_cc_client.subprocess.run")

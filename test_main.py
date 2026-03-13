@@ -7,6 +7,12 @@ import pytest
 from models import SwarmState
 
 
+@pytest.fixture(autouse=True)
+def _set_api_key(monkeypatch):
+    """Ensure ANTHROPIC_API_KEY is set for all tests that invoke main()."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

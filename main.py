@@ -60,6 +60,13 @@ def _read_file(path: str, label: str) -> str:
         sys.exit(1)
 
 
+def _check_env() -> None:
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        print("Error: ANTHROPIC_API_KEY is not set.", file=sys.stderr)
+        print("  export ANTHROPIC_API_KEY=your_key_here", file=sys.stderr)
+        sys.exit(1)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Run the agent swarm")
     request_group = parser.add_mutually_exclusive_group()
@@ -90,6 +97,9 @@ def main():
         help="Load state and scan project, then exit without calling the Claude API",
     )
     args = parser.parse_args()
+
+    if not args.dry_run:
+        _check_env()
 
     if args.file:
         feature_request = _read_file(args.file, "--file")
