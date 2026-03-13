@@ -115,7 +115,7 @@ def scan_project(root_dir: str = ".", interactive: bool = True) -> str:
 
             tree_lines.append(f"{'  ' * (depth + 1)}{filename}")
 
-            if size > FILE_SIZE_THRESHOLD:
+            if size > FILE_SIZE_THRESHOLD and not filename.endswith(".md"):
                 if interactive:
                     skipped = _prompt_large_file(rel_path, size_kb)
                     if skipped:
