@@ -16,6 +16,19 @@ Write output to a specific directory (defaults to current directory):
 
 Dry-run (verify file loading and project discovery without calling the Claude API):
     python main.py --architecture docs/ARCHITECTURE.md --tasks docs/TASKS.md --dry-run
+
+MCP / Claude Code subprocess mode:
+    By default, the Dev and QA agents shell out to `claude -p` instead of calling
+    the Anthropic API directly. This gives them access to your locally configured
+    MCP servers (e.g. Context7 for library docs, Chrome DevTools for UI verification)
+    while keeping tool access locked down via --allowedTools (no Bash, no file writes).
+
+    Override which agents use the subprocess client:
+        SWARM_CC_AGENTS=dev,qa python main.py          # default
+        SWARM_CC_AGENTS=dev,qa,reviewer python main.py # pull reviewer in
+        SWARM_CC_AGENTS= python main.py                # disable for all (pure API mode)
+
+    Requires: `claude` CLI in PATH and an active Claude Code session.
 """
 
 import argparse

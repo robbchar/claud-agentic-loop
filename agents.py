@@ -13,11 +13,24 @@ and is exactly what LangGraph would model as individual graph nodes.
 import os
 
 from claude_client import call_claude, call_claude_json, call_claude_messages
+from claude_cc_client import call_claude_cc, call_claude_cc_json, call_claude_cc_messages
 from models import SwarmState, AgentResult
 
 # Sandbox is opt-in — set SWARM_SANDBOX=true to enable container execution.
 # If false, QA does static analysis only (no code execution).
 SANDBOX_ENABLED = os.environ.get("SWARM_SANDBOX", "false").lower() == "true"
+
+# Agents that shell out to `claude -p` to inherit local MCP servers.
+# Default: dev and qa. Override at runtime: SWARM_CC_AGENTS=dev,qa,reviewer
+# Set to empty string to disable for all agents: SWARM_CC_AGENTS=
+_cc_agents_raw = os.environ.get("SWARM_CC_AGENTS", "dev,qa")
+CC_AGENTS: frozenset[str] = frozenset(
+    a.strip().lower() for a in _cc_agents_raw.split(",") if a.strip()
+)
+
+
+def _use_cc(agent_name: str) -> bool:
+    return agent_name in CC_AGENTS
 
 
 # =============================================================================
@@ -137,7 +150,10 @@ class dev_agent:
                 "content": f"FEEDBACK TO ADDRESS:\n{state.feedback}",
             })
 
-        code = call_claude_messages(DEV_SYSTEM, state.dev_messages)
+        if _use_cc("dev"):
+            code = call_claude_cc_messages(DEV_SYSTEM, state.dev_messages, "dev")
+        else:
+            code = call_claude_messages(DEV_SYSTEM, state.dev_messages)
 
         # Store the assistant turn so the next iteration has full context without re-sending code
         state.dev_messages.append({"role": "assistant", "content": code})
@@ -190,7 +206,10 @@ class qa_agent:
             f"CODE TO REVIEW:\n{state.code}"
             f"{execution_block}"
         )
-        result = call_claude_json(QA_SYSTEM, prompt)
+        if _use_cc("qa"):
+            result = call_claude_cc_json(QA_SYSTEM, prompt, "qa")
+        else:
+            result = call_claude_json(QA_SYSTEM, prompt)
 
         issues_text = "\n".join(
             f"  [{i['severity'].upper()}] {i['description']}"
@@ -241,7 +260,10 @@ class reviewer_agent:
             f"QA REPORT:\n{state.qa_report}\n\n"
             f"CODE TO REVIEW:\n{state.code}"
         )
-        result = call_claude_json(REVIEWER_SYSTEM, prompt)
+        if _use_cc("reviewer"):
+            result = call_claude_cc_json(REVIEWER_SYSTEM, prompt, "reviewer")
+        else:
+            result = call_claude_json(REVIEWER_SYSTEM, prompt)
 
         comments_text = "\n".join(
             f"  [{c['type'].upper()}] {c['description']}"

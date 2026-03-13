@@ -98,17 +98,20 @@ class TestPMAgent:
 # ---------------------------------------------------------------------------
 
 class TestDevAgent:
+    # Dev agent uses call_claude_cc_messages by default (SWARM_CC_AGENTS=dev,qa).
+    # Signature: call_claude_cc_messages(system, messages, agent_name) -> str
+
     def test_first_iteration_seeds_messages(self):
         state = SwarmState()
         state.requirements = "Build X"
         snapshots = []
 
-        def capture(system, messages):
+        def capture(system, messages, agent_name):
             snapshots.append(list(messages))  # copy before the assistant turn is appended
             return "def foo(): pass"
 
         from agents import dev_agent
-        with patch("agents.call_claude_messages", side_effect=capture):
+        with patch("agents.call_claude_cc_messages", side_effect=capture):
             dev_agent.run(state)
 
         assert len(snapshots[0]) == 1
@@ -119,7 +122,7 @@ class TestDevAgent:
         state = SwarmState()
         state.requirements = "Build X"
         from agents import dev_agent
-        with patch("agents.call_claude_messages", return_value="def foo(): pass"):
+        with patch("agents.call_claude_cc_messages", return_value="def foo(): pass"):
             dev_agent.run(state)
 
         assert len(state.dev_messages) == 2
@@ -136,12 +139,12 @@ class TestDevAgent:
         state.feedback = "Add error handling"
         snapshots = []
 
-        def capture(system, messages):
+        def capture(system, messages, agent_name):
             snapshots.append(list(messages))  # copy before the assistant turn is appended
             return "def foo(): raise ..."
 
         from agents import dev_agent
-        with patch("agents.call_claude_messages", side_effect=capture):
+        with patch("agents.call_claude_cc_messages", side_effect=capture):
             dev_agent.run(state)
 
         assert snapshots[0][-1]["role"] == "user"
@@ -151,7 +154,7 @@ class TestDevAgent:
         state = SwarmState()
         state.requirements = "Build X"
         from agents import dev_agent
-        with patch("agents.call_claude_messages", return_value="def foo(): pass"):
+        with patch("agents.call_claude_cc_messages", return_value="def foo(): pass"):
             result = dev_agent.run(state)
         assert result.output == "def foo(): pass"
         assert result.passed is True
@@ -177,6 +180,9 @@ QA_FAIL_RESPONSE = {
 
 
 class TestQAAgent:
+    # QA agent uses call_claude_cc_json by default (SWARM_CC_AGENTS=dev,qa).
+    # Signature: call_claude_cc_json(system, user_message, agent_name) -> dict
+
     def _make_state(self):
         state = SwarmState()
         state.requirements = "validate emails"
@@ -186,7 +192,7 @@ class TestQAAgent:
     def test_pass_result(self):
         state = self._make_state()
         from agents import qa_agent
-        with patch("agents.call_claude_json", return_value=QA_PASS_RESPONSE):
+        with patch("agents.call_claude_cc_json", return_value=QA_PASS_RESPONSE):
             result = qa_agent.run(state)
         assert result.passed is True
         assert result.feedback is None
@@ -195,7 +201,7 @@ class TestQAAgent:
     def test_fail_result(self):
         state = self._make_state()
         from agents import qa_agent
-        with patch("agents.call_claude_json", return_value=QA_FAIL_RESPONSE):
+        with patch("agents.call_claude_cc_json", return_value=QA_FAIL_RESPONSE):
             result = qa_agent.run(state)
         assert result.passed is False
         assert result.feedback == "Handle empty input case"
@@ -204,7 +210,7 @@ class TestQAAgent:
     def test_issues_formatted_in_output(self):
         state = self._make_state()
         from agents import qa_agent
-        with patch("agents.call_claude_json", return_value=QA_FAIL_RESPONSE):
+        with patch("agents.call_claude_cc_json", return_value=QA_FAIL_RESPONSE):
             result = qa_agent.run(state)
         assert "CRITICAL" in result.output
         assert "crashes on empty input" in result.output
@@ -212,23 +218,23 @@ class TestQAAgent:
     def test_no_issues_shows_none(self):
         state = self._make_state()
         from agents import qa_agent
-        with patch("agents.call_claude_json", return_value=QA_PASS_RESPONSE):
+        with patch("agents.call_claude_cc_json", return_value=QA_PASS_RESPONSE):
             result = qa_agent.run(state)
         assert "None" in result.output
 
     def test_prompt_includes_requirements_and_code(self):
         state = self._make_state()
         from agents import qa_agent
-        with patch("agents.call_claude_json", return_value=QA_PASS_RESPONSE) as mock:
+        with patch("agents.call_claude_cc_json", return_value=QA_PASS_RESPONSE) as mock:
             qa_agent.run(state)
-        _, prompt = mock.call_args.args
+        _, prompt, _ = mock.call_args.args
         assert "validate emails" in prompt
         assert "def validate(email)" in prompt
 
     def test_empty_feedback_string_becomes_none(self):
         state = self._make_state()
         from agents import qa_agent
-        with patch("agents.call_claude_json", return_value=QA_PASS_RESPONSE):
+        with patch("agents.call_claude_cc_json", return_value=QA_PASS_RESPONSE):
             result = qa_agent.run(state)
         assert result.feedback is None
 
