@@ -68,12 +68,20 @@ def _run(cmd: list[str], label: str = "agent", spinner=None) -> str:
     If a Spinner is passed, it is cleared as soon as the first output chunk
     arrives so streaming output is not interleaved with the spinner.
     """
+    # On Windows, Ctrl+C is broadcast to every process sharing the console.
+    # Claude catches it and continues, so we isolate it in its own process group
+    # and kill it ourselves when interrupted.
+    popen_kwargs: dict = {}
+    if os.name == "nt":
+        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
         encoding="utf-8",
+        **popen_kwargs,
     )
 
     collected: list[str] = []
@@ -108,6 +116,8 @@ def _run(cmd: list[str], label: str = "agent", spinner=None) -> str:
     except KeyboardInterrupt:
         print(f"\n\n⛔  Interrupted — killing [{label}] subprocess...", flush=True)
         proc.kill()
+        if proc.stdout:
+            proc.stdout.close()  # unblocks the reader thread's read() call
         reader.join(timeout=2)
         raise
 
