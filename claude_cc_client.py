@@ -180,6 +180,17 @@ def call_claude_cc(
             text = text.split("\n", 1)[-1]
             text = text.rsplit("```", 1)[0]
         text = text.strip()
+        # Strip any preamble text that precedes the JSON object/array.
+        # Agents sometimes output an explanation before the JSON despite being
+        # told not to — find the first { or [ and discard everything before it.
+        # Only search if the text doesn't already start with a JSON opener.
+        if not (text.startswith('{') or text.startswith('[')):
+            for marker in ('{', '['):
+                idx = text.find(marker)
+                if idx > 0:
+                    text = text[idx:]
+                    break
+        text = text.strip()
 
     return text
 

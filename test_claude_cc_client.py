@@ -167,6 +167,18 @@ def test_call_claude_cc_plain_json_unchanged(mock_run):
     assert result == '{"key": "val"}'
 
 
+@patch("claude_cc_client._run", return_value='Here is my verdict.\n{"key": "val"}')
+def test_call_claude_cc_strips_preamble_before_json(mock_run):
+    result = call_claude_cc("sys", "msg", "qa", expect_json=True)
+    assert result == '{"key": "val"}'
+
+
+@patch("claude_cc_client._run", return_value='Some explanation.\n[1, 2, 3]')
+def test_call_claude_cc_strips_preamble_before_json_array(mock_run):
+    result = call_claude_cc("sys", "msg", "qa", expect_json=True)
+    assert result == '[1, 2, 3]'
+
+
 # ---------------------------------------------------------------------------
 # call_claude_cc_json
 # ---------------------------------------------------------------------------
