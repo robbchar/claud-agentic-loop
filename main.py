@@ -319,7 +319,15 @@ def main():
 
     # Final checkpoint write (also written incrementally after each task by orchestrator)
     with open(checkpoint_path, "w", encoding="utf-8") as f:
-        json.dump(state.history, f, indent=2)
+        json.dump({
+            "version": 1,
+            "feature_request": state.feature_request,
+            "output_dir": state.output_dir,
+            "requirements": state.requirements or "",
+            "completed_tasks": state.completed_tasks,
+            "pending_tasks": state.pending_tasks,
+            "history": state.history,
+        }, f, indent=2)
     print(f"\nFull history written to {checkpoint_path}")
 
     if state.approved:
