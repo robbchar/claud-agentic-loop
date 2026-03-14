@@ -1,6 +1,7 @@
 """Tests for orchestrator.py — loop control, PM skip, iteration logic, per-task splitting."""
 
 import contextlib
+import json
 from unittest.mock import patch, MagicMock
 import pytest
 from models import SwarmState, AgentResult
@@ -365,3 +366,79 @@ class TestRunSwarmMultiTask:
         state.requirements = PM_OUTPUT_TWO_TASKS
         _, scout_mock = self._run_two_tasks(state)
         assert scout_mock.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Checkpoint writing
+# ---------------------------------------------------------------------------
+
+class TestCheckpoint:
+    def test_checkpoint_written_after_task_approval(self, tmp_path):
+        checkpoint = tmp_path / "run.json"
+        state = SwarmState()
+        state.requirements = "build a thing"
+        with (
+            patch("orchestrator.pm_agent.run"),
+            patch("orchestrator.dev_agent.run", return_value=_make_dev_result()),
+            patch("orchestrator.qa_agent.run", return_value=_make_qa_pass()),
+            patch("orchestrator.reviewer_agent.run", return_value=_make_reviewer_approved()),
+        ):
+            run_swarm(state=state, verbose=False, checkpoint_path=str(checkpoint))
+        assert checkpoint.exists()
+
+    def test_checkpoint_contains_completed_task(self, tmp_path):
+        checkpoint = tmp_path / "run.json"
+        state = SwarmState()
+        state.requirements = "build a thing"
+        with (
+            patch("orchestrator.pm_agent.run"),
+            patch("orchestrator.dev_agent.run", return_value=_make_dev_result()),
+            patch("orchestrator.qa_agent.run", return_value=_make_qa_pass()),
+            patch("orchestrator.reviewer_agent.run", return_value=_make_reviewer_approved()),
+        ):
+            run_swarm(state=state, verbose=False, checkpoint_path=str(checkpoint))
+        data = json.loads(checkpoint.read_text())
+        assert len(data["completed_tasks"]) == 1
+
+    def test_checkpoint_pending_empty_after_completion(self, tmp_path):
+        checkpoint = tmp_path / "run.json"
+        state = SwarmState()
+        state.requirements = "build a thing"
+        with (
+            patch("orchestrator.pm_agent.run"),
+            patch("orchestrator.dev_agent.run", return_value=_make_dev_result()),
+            patch("orchestrator.qa_agent.run", return_value=_make_qa_pass()),
+            patch("orchestrator.reviewer_agent.run", return_value=_make_reviewer_approved()),
+        ):
+            run_swarm(state=state, verbose=False, checkpoint_path=str(checkpoint))
+        data = json.loads(checkpoint.read_text())
+        assert data["pending_tasks"] == []
+
+    def test_checkpoint_preserves_original_requirements(self, tmp_path):
+        checkpoint = tmp_path / "run.json"
+        state = SwarmState()
+        state.requirements = PM_OUTPUT_TWO_TASKS
+        with (
+            patch("orchestrator.pm_agent.run"),
+            patch("orchestrator.dev_agent.run", return_value=_make_dev_result()),
+            patch("orchestrator.qa_agent.run", return_value=_make_qa_pass()),
+            patch("orchestrator.reviewer_agent.run", return_value=_make_reviewer_approved()),
+            patch("orchestrator.scan_project", return_value="project context"),
+        ):
+            run_swarm(state=state, verbose=False, checkpoint_path=str(checkpoint))
+        data = json.loads(checkpoint.read_text())
+        # requirements should be the full PM output, not just the last task string
+        assert "MILESTONE" in data["requirements"]
+        assert "GLOBAL CONSTRAINTS" in data["requirements"]
+
+    def test_no_checkpoint_when_path_is_none(self, tmp_path):
+        state = SwarmState()
+        state.requirements = "build a thing"
+        with (
+            patch("orchestrator.pm_agent.run"),
+            patch("orchestrator.dev_agent.run", return_value=_make_dev_result()),
+            patch("orchestrator.qa_agent.run", return_value=_make_qa_pass()),
+            patch("orchestrator.reviewer_agent.run", return_value=_make_reviewer_approved()),
+        ):
+            run_swarm(state=state, verbose=False, checkpoint_path=None)
+        # No file should be written in the tmp_path (nothing to assert — just no crash)

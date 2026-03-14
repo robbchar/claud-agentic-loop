@@ -92,6 +92,14 @@ def main():
     )
     parser.add_argument("--quiet", action="store_true", help="Suppress verbose output")
     parser.add_argument(
+        "--resume",
+        type=str,
+        nargs="?",
+        const="swarm_run.json",
+        metavar="CHECKPOINT",
+        help="Resume from a previous run's checkpoint file (default: swarm_run.json)",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Load state and scan project, then exit without calling the Claude API",
@@ -100,11 +108,6 @@ def main():
 
     if not args.dry_run:
         _check_env()
-
-    if args.file:
-        feature_request = _read_file(args.file, "--file")
-    else:
-        feature_request = args.request or DEFAULT_REQUEST
 
     # Validate sandbox at startup so failures are obvious, not cryptic mid-run
     if os.environ.get("SWARM_SANDBOX", "false").lower() == "true":
@@ -115,32 +118,69 @@ def main():
             sys.exit(1)
         print(f"Sandbox: {msg}")
 
-    state = SwarmState(feature_request=feature_request, output_dir=args.output_dir)
+    checkpoint_path = "swarm_run.json"
 
-    # Populate spec docs. Explicit flags always load (error if missing).
-    # Default paths are loaded silently only if the file exists.
-    arch_path = args.architecture
-    tasks_path = args.tasks
+    if args.resume:
+        # --- Resume from checkpoint ---
+        try:
+            with open(args.resume, encoding="utf-8") as f:
+                checkpoint = json.load(f)
+        except FileNotFoundError:
+            print(f"Error: checkpoint file not found: {args.resume}", file=sys.stderr)
+            sys.exit(1)
+        except json.JSONDecodeError as e:
+            print(f"Error: checkpoint file is not valid JSON: {e}", file=sys.stderr)
+            sys.exit(1)
 
-    if arch_path is not None:
-        state.architecture = _read_file(arch_path, "--architecture")
-        print(f"[spec] Loaded architecture doc: {arch_path} ({len(state.architecture)} chars)")
-    elif os.path.exists(DEFAULT_ARCHITECTURE_PATH):
-        state.architecture = _read_file(DEFAULT_ARCHITECTURE_PATH, "--architecture")
-        print(f"[spec] Loaded architecture doc: {DEFAULT_ARCHITECTURE_PATH} ({len(state.architecture)} chars)")
+        completed = checkpoint.get("completed_tasks", [])
+        pending = checkpoint.get("pending_tasks", [])
+        print(f"[resume] Loaded checkpoint: {args.resume}")
+        print(f"[resume] {len(completed)} task(s) done, {len(pending)} remaining")
 
-    if tasks_path is not None:
-        state.tasks_doc = _read_file(tasks_path, "--tasks")
-        print(f"[spec] Loaded tasks doc: {tasks_path} ({len(state.tasks_doc)} chars)")
-    elif os.path.exists(DEFAULT_TASKS_PATH):
-        state.tasks_doc = _read_file(DEFAULT_TASKS_PATH, "--tasks")
-        print(f"[spec] Loaded tasks doc: {DEFAULT_TASKS_PATH} ({len(state.tasks_doc)} chars)")
+        if not pending:
+            print("[resume] No pending tasks — nothing to do.")
+            return
+
+        state = SwarmState(
+            feature_request=checkpoint.get("feature_request", ""),
+            output_dir=checkpoint.get("output_dir", args.output_dir),
+            requirements=checkpoint.get("requirements") or "resumed",
+            completed_tasks=completed,
+            pending_tasks=pending,
+        )
+    else:
+        # --- Normal startup ---
+        if args.file:
+            feature_request = _read_file(args.file, "--file")
+        else:
+            feature_request = args.request or DEFAULT_REQUEST
+
+        state = SwarmState(feature_request=feature_request, output_dir=args.output_dir)
+
+        # Populate spec docs. Explicit flags always load (error if missing).
+        # Default paths are loaded silently only if the file exists.
+        arch_path = args.architecture
+        tasks_path = args.tasks
+
+        if arch_path is not None:
+            state.architecture = _read_file(arch_path, "--architecture")
+            print(f"[spec] Loaded architecture doc: {arch_path} ({len(state.architecture)} chars)")
+        elif os.path.exists(DEFAULT_ARCHITECTURE_PATH):
+            state.architecture = _read_file(DEFAULT_ARCHITECTURE_PATH, "--architecture")
+            print(f"[spec] Loaded architecture doc: {DEFAULT_ARCHITECTURE_PATH} ({len(state.architecture)} chars)")
+
+        if tasks_path is not None:
+            state.tasks_doc = _read_file(tasks_path, "--tasks")
+            print(f"[spec] Loaded tasks doc: {tasks_path} ({len(state.tasks_doc)} chars)")
+        elif os.path.exists(DEFAULT_TASKS_PATH):
+            state.tasks_doc = _read_file(DEFAULT_TASKS_PATH, "--tasks")
+            print(f"[spec] Loaded tasks doc: {DEFAULT_TASKS_PATH} ({len(state.tasks_doc)} chars)")
 
     # Project discovery — scan the output directory so the Dev agent knows
     # what it's writing into. Interactive prompts for large files unless dry-run.
-    print(f"\n[scout] Scanning project: {os.path.abspath(args.output_dir)}")
+    print(f"\n[scout] Scanning project: {os.path.abspath(state.output_dir)}")
     state.project_context = scan_project(
-        args.output_dir,
+        state.output_dir,
         interactive=not args.dry_run,
     )
     # Print just the framework line so the user gets quick feedback
@@ -159,7 +199,7 @@ def main():
         print("No API calls made.")
         return
 
-    state = run_swarm(state=state, verbose=not args.quiet)
+    state = run_swarm(state=state, verbose=not args.quiet, checkpoint_path=checkpoint_path)
 
     print("\n" + "=" * 50)
     print("FINAL STATE SUMMARY")
@@ -172,10 +212,10 @@ def main():
         print("\n--- FINAL CODE ---")
         print(state.code)
 
-    # Dump full history to file for inspection
-    with open("swarm_run.json", "w") as f:
+    # Final checkpoint write (also written incrementally after each task by orchestrator)
+    with open(checkpoint_path, "w", encoding="utf-8") as f:
         json.dump(state.history, f, indent=2)
-    print("\nFull history written to swarm_run.json")
+    print(f"\nFull history written to {checkpoint_path}")
 
 
 if __name__ == "__main__":

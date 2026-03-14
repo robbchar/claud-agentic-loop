@@ -3,6 +3,7 @@ Agent Swarm Orchestrator
 Manages the loop: Requirements → per-task Dev → QA → Reviewer → (repeat or done)
 """
 
+import json
 import re
 from agents import pm_agent, dev_agent, qa_agent, reviewer_agent
 from models import SwarmState, AgentResult
@@ -12,6 +13,21 @@ from writer import write_files
 
 
 MAX_ITERATIONS = 5
+
+
+def _write_checkpoint(state: SwarmState, original_requirements: str, path: str) -> None:
+    """Persist enough state to resume a crashed run via --resume."""
+    data = {
+        "version": 1,
+        "feature_request": state.feature_request,
+        "output_dir": state.output_dir,
+        "requirements": original_requirements,
+        "completed_tasks": state.completed_tasks,
+        "pending_tasks": state.pending_tasks,
+        "history": state.history,
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
 
 
 def _split_tasks(pm_output: str) -> list[str]:
@@ -55,7 +71,7 @@ def _split_tasks(pm_output: str) -> list[str]:
     return result if result else [pm_output]
 
 
-def run_swarm(state: SwarmState, verbose: bool = True) -> SwarmState:
+def run_swarm(state: SwarmState, verbose: bool = True, checkpoint_path: str | None = None) -> SwarmState:
     """
     Main entry point. Accepts a pre-built SwarmState, runs the full pipeline,
     and returns the final state.
@@ -78,6 +94,9 @@ def run_swarm(state: SwarmState, verbose: bool = True) -> SwarmState:
         state.requirements = result.output
         state.history.append({"agent": "pm", "output": result.output})
         log(f"✅ Requirements done.\n{result.output}\n")
+
+    # Capture full PM output before the per-task loop overwrites state.requirements
+    original_requirements: str = state.requirements or ""
 
     # Populate task queue from PM output (only if not already set — allows
     # callers to inject pending_tasks directly for testing or resumption)
@@ -165,6 +184,9 @@ def run_swarm(state: SwarmState, verbose: bool = True) -> SwarmState:
                     log("\n[writer] No FILE blocks found in output — code printed above only.")
 
                 state.completed_tasks.append(current_task)
+
+                if checkpoint_path:
+                    _write_checkpoint(state, original_requirements, checkpoint_path)
 
                 # Re-scan project so the next task's Dev agent sees files just written
                 if state.pending_tasks:
