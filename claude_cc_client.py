@@ -44,14 +44,14 @@ AGENT_ALLOWED_TOOLS: dict[str, list[str]] = {
 
 def _build_cmd(
     system_prompt: str,
-    user_message: str,
     allowed_tools: list[str],
 ) -> list[str]:
-    cmd = ["claude", "-p", user_message, "--system-prompt", system_prompt]
+    # Prompt is passed via stdin (not as a CLI argument) to avoid Windows'
+    # 32,767-character command line limit when project context is large.
+    cmd = ["claude", "-p", "--system-prompt", system_prompt]
     if allowed_tools:
         cmd += ["--allowedTools"] + allowed_tools
     else:
-        # Explicit empty list — deny all tools (belt-and-suspenders)
         cmd += ["--allowedTools", "none"]
     return cmd
 
@@ -59,11 +59,14 @@ def _build_cmd(
 _TIMEOUT = int(os.environ.get("SWARM_CC_TIMEOUT", "600"))
 
 
-def _run(cmd: list[str], label: str = "agent", spinner=None) -> str:
+def _run(cmd: list[str], user_message: str, label: str = "agent", spinner=None) -> str:
     """
     Run `claude -p` and stream its stdout to the terminal in real time
     while also collecting it for the return value. Kills the process and
     raises RuntimeError if it exceeds _TIMEOUT seconds.
+
+    The prompt is written to stdin rather than passed as a CLI argument to
+    avoid Windows' 32,767-character command line length limit.
 
     If a Spinner is passed, it is cleared as soon as the first output chunk
     arrives so streaming output is not interleaved with the spinner.
@@ -77,12 +80,24 @@ def _run(cmd: list[str], label: str = "agent", spinner=None) -> str:
 
     proc = subprocess.Popen(
         cmd,
+        stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
         encoding="utf-8",
         **popen_kwargs,
     )
+
+    # Write prompt to stdin in a thread to avoid blocking if the pipe buffer fills.
+    def _write_stdin() -> None:
+        assert proc.stdin is not None
+        try:
+            proc.stdin.write(user_message)
+            proc.stdin.close()
+        except (BrokenPipeError, OSError):
+            pass  # process already exited
+
+    threading.Thread(target=_write_stdin, daemon=True).start()
 
     collected: list[str] = []
     start = time.monotonic()
@@ -156,8 +171,8 @@ def call_claude_cc(
         )
 
     allowed = AGENT_ALLOWED_TOOLS.get(agent_name, [])
-    cmd = _build_cmd(system_prompt, user_message, allowed)
-    text = _run(cmd, label=agent_name, spinner=spinner)
+    cmd = _build_cmd(system_prompt, allowed)
+    text = _run(cmd, user_message=user_message, label=agent_name, spinner=spinner)
 
     if expect_json:
         text = text.strip()

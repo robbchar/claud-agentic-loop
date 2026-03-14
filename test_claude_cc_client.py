@@ -21,24 +21,29 @@ from claude_cc_client import (
 # _build_cmd
 # ---------------------------------------------------------------------------
 
-def test_build_cmd_includes_system_and_message():
-    cmd = _build_cmd("sys", "hello", [])
+def test_build_cmd_includes_system_prompt():
+    cmd = _build_cmd("sys", [])
     assert "claude" in cmd
     assert "-p" in cmd
-    assert "hello" in cmd
     assert "--system-prompt" in cmd
     assert "sys" in cmd
 
 
+def test_build_cmd_does_not_include_user_message():
+    # Prompt is passed via stdin now, not as a CLI arg
+    cmd = _build_cmd("sys", [])
+    assert "hello" not in cmd
+
+
 def test_build_cmd_with_allowed_tools():
-    cmd = _build_cmd("sys", "msg", ["mcp__context7__*"])
+    cmd = _build_cmd("sys", ["mcp__context7__*"])
     assert "--allowedTools" in cmd
     idx = cmd.index("--allowedTools")
     assert cmd[idx + 1] == "mcp__context7__*"
 
 
 def test_build_cmd_empty_tools_passes_none():
-    cmd = _build_cmd("sys", "msg", [])
+    cmd = _build_cmd("sys", [])
     assert "--allowedTools" in cmd
     idx = cmd.index("--allowedTools")
     assert cmd[idx + 1] == "none"
@@ -46,7 +51,7 @@ def test_build_cmd_empty_tools_passes_none():
 
 def test_build_cmd_multiple_tools():
     tools = ["mcp__context7__*", "mcp__chrome-devtools__*"]
-    cmd = _build_cmd("sys", "msg", tools)
+    cmd = _build_cmd("sys", tools)
     idx = cmd.index("--allowedTools")
     assert cmd[idx + 1] == "mcp__context7__*"
     assert cmd[idx + 2] == "mcp__chrome-devtools__*"
@@ -96,7 +101,7 @@ def _make_popen_mock(output: str = "response text", returncode: int = 0, stderr_
 @patch("claude_cc_client.subprocess.Popen")
 def test_run_returns_stripped_output(mock_popen):
     mock_popen.return_value = _make_popen_mock(output="  hello world  ")
-    result = _run(["claude", "-p", "test"], label="dev")
+    result = _run(["claude", "-p"], user_message="  hello world  ", label="dev")
     assert result == "hello world"
 
 
@@ -104,7 +109,7 @@ def test_run_returns_stripped_output(mock_popen):
 def test_run_raises_on_nonzero_exit(mock_popen):
     mock_popen.return_value = _make_popen_mock(returncode=1, stderr_text="bad things")
     with pytest.raises(RuntimeError, match="exited 1"):
-        _run(["claude", "-p", "test"])
+        _run(["claude", "-p"], user_message="test")
 
 
 @patch("claude_cc_client.subprocess.Popen")
@@ -115,7 +120,7 @@ def test_run_raises_on_timeout(mock_popen):
     mock_popen.return_value = proc
     with patch("claude_cc_client._TIMEOUT", 0):
         with pytest.raises(RuntimeError, match="timed out"):
-            _run(["claude", "-p", "test"])
+            _run(["claude", "-p"], user_message="test")
     proc.kill.assert_called_once()
 
 
@@ -192,9 +197,8 @@ def test_call_claude_cc_messages_flattens_conversation(mock_run):
         {"role": "user", "content": "add tests"},
     ]
     call_claude_cc_messages("sys", messages, "dev")
-    cmd = mock_run.call_args[0][0]
-    prompt_idx = cmd.index("-p") + 1
-    flattened = cmd[prompt_idx]
+    # Prompt is now passed via the user_message kwarg, not in the cmd list
+    flattened = mock_run.call_args.kwargs["user_message"]
     assert "[USER]" in flattened
     assert "[ASSISTANT]" in flattened
     assert "write me a function" in flattened
