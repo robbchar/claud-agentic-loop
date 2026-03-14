@@ -51,6 +51,109 @@ DEFAULT_ARCHITECTURE_PATH = "docs/ARCHITECTURE.md"
 DEFAULT_TASKS_PATH = "docs/TASKS.md"
 
 
+def _milestone_name(state) -> str:
+    """Extract the milestone name from the first completed task string."""
+    for task in state.completed_tasks:
+        for line in task.splitlines():
+            if line.startswith("MILESTONE:"):
+                return line.replace("MILESTONE:", "").strip()
+    return "Milestone"
+
+
+def _checkpoint_section(tasks_doc: str) -> str:
+    """
+    Pull the first CHECKPOINT section out of a TASKS.md-style doc.
+    Returns an empty string if none is found.
+    """
+    if not tasks_doc or "CHECKPOINT" not in tasks_doc:
+        return ""
+    lines = tasks_doc.splitlines()
+    collecting = False
+    result = []
+    for line in lines:
+        if not collecting:
+            if "CHECKPOINT" in line:
+                collecting = True
+        else:
+            # Stop at the next top-level heading (## Milestone N+1)
+            if line.startswith("## ") and "CHECKPOINT" not in line:
+                break
+            result.append(line)
+    return "\n".join(result).strip()
+
+
+def _next_run_cmd(args) -> str:
+    """Rebuild the main.py invocation from the current args (without --resume)."""
+    parts = ["python main.py"]
+    if args.file:
+        parts.append(f'--file "{args.file}"')
+    elif args.request:
+        parts.append(f'--request "{args.request}"')
+    if args.architecture:
+        parts.append(f'--architecture "{args.architecture}"')
+    if args.tasks:
+        parts.append(f'--tasks "{args.tasks}"')
+    if args.output_dir and args.output_dir != ".":
+        parts.append(f'--output-dir "{args.output_dir}"')
+    if args.quiet:
+        parts.append("--quiet")
+    return " ".join(parts)
+
+
+def _startup_commands(output_dir: str, project_context: str) -> list[str]:
+    """
+    Infer the commands needed to start the project for manual verification.
+    Returns a list of shell command strings.
+    """
+    ctx = project_context.lower()
+    out = os.path.abspath(output_dir)
+    cmds = []
+
+    if "express" in ctx or "node" in ctx or "package.json" in ctx:
+        cmds.append(f"cd {out}")
+        if "npm install" in ctx or "node_modules" not in ctx:
+            cmds.append("npm install")
+        cmds.append("node server/index.js")
+
+    if "vite" in ctx or "react" in ctx:
+        cmds.append("# (second terminal) cd client && npm run dev")
+
+    return cmds
+
+
+def _print_milestone_complete(state, args) -> None:
+    name = _milestone_name(state)
+    width = 60
+    print("\n" + "=" * width)
+    print(f"  🎉  MILESTONE COMPLETE: {name}")
+    print("=" * width)
+    print(f"\n  {len(state.completed_tasks)} task(s) approved and written to disk.")
+
+    # Show startup commands so the user knows how to bring the project up
+    startup = _startup_commands(state.output_dir, state.project_context)
+    if startup:
+        print("\n🚀  Start the project first:\n")
+        for cmd in startup:
+            print(f"    {cmd}")
+
+    checkpoint = _checkpoint_section(state.tasks_doc)
+    if checkpoint:
+        print("\n📋  Then verify manually:\n")
+        print(checkpoint)
+    else:
+        print("\n📋  Then spot-check the output:")
+        for task in state.completed_tasks:
+            for line in task.splitlines():
+                stripped = line.strip()
+                if stripped.startswith("["):
+                    print(f"   • {stripped}")
+                    break
+
+    print(f"\n▶   When ready, start the next milestone:\n")
+    print(f"    {_next_run_cmd(args)}\n")
+    print("=" * width)
+
+
 def _read_file(path: str, label: str) -> str:
     try:
         with open(path, encoding="utf-8") as f:
@@ -216,6 +319,9 @@ def main():
     with open(checkpoint_path, "w", encoding="utf-8") as f:
         json.dump(state.history, f, indent=2)
     print(f"\nFull history written to {checkpoint_path}")
+
+    if state.approved:
+        _print_milestone_complete(state, args)
 
 
 if __name__ == "__main__":
