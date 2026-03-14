@@ -274,9 +274,11 @@ def main():
 
         if tasks_path is not None:
             state.tasks_doc = _read_file(tasks_path, "--tasks")
+            state.tasks_doc_path = os.path.abspath(tasks_path)
             print(f"[spec] Loaded tasks doc: {tasks_path} ({len(state.tasks_doc)} chars)")
         elif os.path.exists(DEFAULT_TASKS_PATH):
             state.tasks_doc = _read_file(DEFAULT_TASKS_PATH, "--tasks")
+            state.tasks_doc_path = os.path.abspath(DEFAULT_TASKS_PATH)
             print(f"[spec] Loaded tasks doc: {DEFAULT_TASKS_PATH} ({len(state.tasks_doc)} chars)")
 
     # Project discovery — scan the output directory so the Dev agent knows

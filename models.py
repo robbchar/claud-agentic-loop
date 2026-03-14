@@ -39,6 +39,9 @@ class SwarmState:
     project_context: str = ""
     output_dir: str = "."
 
+    # Path to the TASKS.md file on disk — used to mark tasks complete after approval
+    tasks_doc_path: str = ""
+
     # Artifacts produced by each agent
     requirements: Optional[str] = None
     code: Optional[str] = None

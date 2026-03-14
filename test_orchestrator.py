@@ -5,7 +5,7 @@ import json
 from unittest.mock import patch, MagicMock
 import pytest
 from models import SwarmState, AgentResult
-from orchestrator import run_swarm, _split_tasks, MAX_ITERATIONS
+from orchestrator import run_swarm, _split_tasks, _mark_task_complete, MAX_ITERATIONS
 
 
 def _make_pm_result(output="requirements text"):
@@ -371,6 +371,52 @@ class TestRunSwarmMultiTask:
 # ---------------------------------------------------------------------------
 # Checkpoint writing
 # ---------------------------------------------------------------------------
+
+TASKS_DOC = """\
+## Milestone 1
+
+### Task 1.1 - Scaffold
+**Status:** pending
+
+### Task 1.2 - Service
+**Status:** pending
+
+### Task 1.3 - Routes
+**Status:** pending
+"""
+
+
+class TestMarkTaskComplete:
+    def test_marks_task_complete(self, tmp_path):
+        f = tmp_path / "TASKS.md"
+        f.write_text(TASKS_DOC)
+        _mark_task_complete(str(f), "1.1")
+        assert "**Status:** complete" in f.read_text()
+
+    def test_only_marks_the_right_task(self, tmp_path):
+        f = tmp_path / "TASKS.md"
+        f.write_text(TASKS_DOC)
+        _mark_task_complete(str(f), "1.2")
+        content = f.read_text()
+        lines = content.splitlines()
+        statuses = [l for l in lines if "**Status:**" in l]
+        assert statuses[0] == "**Status:** pending"   # 1.1 unchanged
+        assert statuses[1] == "**Status:** complete"  # 1.2 updated
+        assert statuses[2] == "**Status:** pending"   # 1.3 unchanged
+
+    def test_noop_when_path_empty(self, tmp_path):
+        # Should not raise even when path is empty string
+        _mark_task_complete("", "1.1")
+
+    def test_noop_when_file_missing(self, tmp_path):
+        _mark_task_complete(str(tmp_path / "nope.md"), "1.1")
+
+    def test_noop_when_task_id_not_found(self, tmp_path):
+        f = tmp_path / "TASKS.md"
+        f.write_text(TASKS_DOC)
+        _mark_task_complete(str(f), "9.9")
+        assert "**Status:** pending" in f.read_text()
+
 
 class TestCheckpoint:
     def test_checkpoint_written_after_task_approval(self, tmp_path):

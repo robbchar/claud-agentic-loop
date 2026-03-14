@@ -15,6 +15,34 @@ from writer import write_files
 MAX_ITERATIONS = 5
 
 
+def _mark_task_complete(tasks_doc_path: str, task_id: str) -> None:
+    """
+    Update the **Status:** line for `task_id` in the TASKS.md file to 'complete'.
+    No-ops silently if the file doesn't exist or the task ID isn't found.
+    """
+    if not tasks_doc_path:
+        return
+    try:
+        with open(tasks_doc_path, encoding="utf-8") as f:
+            content = f.read()
+    except FileNotFoundError:
+        return
+
+    lines = content.splitlines(keepends=True)
+    task_heading_re = re.compile(rf'\b{re.escape(task_id)}\b')
+    for i, line in enumerate(lines):
+        if line.startswith("#") and task_heading_re.search(line):
+            # Found the task heading — update the first **Status:** in the next ~10 lines
+            for j in range(i + 1, min(i + 10, len(lines))):
+                if "**Status:**" in lines[j]:
+                    lines[j] = re.sub(r"\*\*Status:\*\*\s*\S+", "**Status:** complete", lines[j])
+                    with open(tasks_doc_path, "w", encoding="utf-8") as f:
+                        f.writelines(lines)
+                    return
+                if lines[j].startswith("#"):
+                    break  # hit the next section without finding a status line
+
+
 def _write_checkpoint(state: SwarmState, original_requirements: str, path: str) -> None:
     """Persist enough state to resume a crashed run via --resume."""
     data = {
@@ -184,6 +212,12 @@ def run_swarm(state: SwarmState, verbose: bool = True, checkpoint_path: str | No
                     log("\n[writer] No FILE blocks found in output — code printed above only.")
 
                 state.completed_tasks.append(current_task)
+
+                # Mark the task complete in TASKS.md on disk so the next run's
+                # PM agent doesn't re-process it
+                task_id_match = re.search(r'\[(\d+\.\d+)\]', current_task)
+                if task_id_match:
+                    _mark_task_complete(state.tasks_doc_path, task_id_match.group(1))
 
                 if checkpoint_path:
                     _write_checkpoint(state, original_requirements, checkpoint_path)
