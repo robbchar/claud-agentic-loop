@@ -332,3 +332,11 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("\n\n⛔  Interrupted.", flush=True)
         sys.exit(1)
+    except Exception as e:
+        from claude_cc_client import BillingError
+        if isinstance(e, BillingError):
+            print(f"\n\n💳  {e}", flush=True)
+            print("Once topped up, resume where you left off:", flush=True)
+            print("  python main.py --resume", flush=True)
+            sys.exit(2)
+        raise

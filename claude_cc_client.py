@@ -32,6 +32,10 @@ import threading
 import time
 
 
+class BillingError(RuntimeError):
+    """Raised when the Claude subprocess exits due to insufficient credits."""
+
+
 # Tools each agent is allowed to use. Restricting to specific MCP namespaces
 # means agents can look things up (read-only) but cannot touch the filesystem.
 AGENT_ALLOWED_TOOLS: dict[str, list[str]] = {
@@ -142,8 +146,17 @@ def _run(cmd: list[str], user_message: str, label: str = "agent", spinner=None) 
 
     if proc.returncode != 0:
         assert proc.stderr is not None
+        stderr_text = proc.stderr.read().strip()
+        stdout_text = "".join(collected).strip()
+        # Check both streams for billing messages — claude writes them to stdout
+        combined = f"{stdout_text}\n{stderr_text}".lower()
+        if "credit balance" in combined or "insufficient" in combined or "billing" in combined:
+            raise BillingError(
+                "Claude Code credit balance is too low.\n"
+                "Top up at: https://claude.ai/settings/billing"
+            )
         raise RuntimeError(
-            f"claude subprocess exited {proc.returncode}:\n{proc.stderr.read().strip()}"
+            f"claude subprocess exited {proc.returncode}:\n{stderr_text or stdout_text}"
         )
 
     return "".join(collected).strip()

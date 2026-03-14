@@ -6,6 +6,7 @@ Manages the loop: Requirements → per-task Dev → QA → Reviewer → (repeat 
 import json
 import re
 from agents import pm_agent, dev_agent, qa_agent, reviewer_agent
+from claude_cc_client import BillingError
 from models import SwarmState, AgentResult
 from scout import scan_project
 from spinner import Spinner
@@ -161,6 +162,8 @@ def run_swarm(state: SwarmState, verbose: bool = True, checkpoint_path: str | No
             try:
                 with Spinner("\n💻 [Dev Agent] Writing code") as sp:
                     result = dev_agent.run(state, spinner=sp)
+            except BillingError:
+                raise
             except RuntimeError as e:
                 log(f"\n❌ [Dev Agent] failed: {e}")
                 log("Skipping task.")
@@ -173,6 +176,8 @@ def run_swarm(state: SwarmState, verbose: bool = True, checkpoint_path: str | No
             try:
                 with Spinner("\n🧪 [QA Agent] Testing code") as sp:
                     result = qa_agent.run(state, spinner=sp)
+            except BillingError:
+                raise
             except RuntimeError as e:
                 log(f"\n❌ [QA Agent] failed: {e}")
                 log("Skipping task.")
@@ -190,6 +195,8 @@ def run_swarm(state: SwarmState, verbose: bool = True, checkpoint_path: str | No
             try:
                 with Spinner("\n🔍 [Reviewer Agent] Reviewing code") as sp:
                     result = reviewer_agent.run(state, spinner=sp)
+            except BillingError:
+                raise
             except RuntimeError as e:
                 log(f"\n❌ [Reviewer Agent] failed: {e}")
                 log("Skipping task.")
