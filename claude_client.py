@@ -92,6 +92,14 @@ def call_claude(
             text = text.split("\n", 1)[-1]
             text = text.rsplit("```", 1)[0]
         text = text.strip()
+        # Strip preamble text before the JSON object/array
+        if not (text.startswith("{") or text.startswith("[")):
+            for marker in ("{", "["):
+                idx = text.find(marker)
+                if idx > 0:
+                    text = text[idx:]
+                    break
+        text = text.strip()
 
     return text
 
