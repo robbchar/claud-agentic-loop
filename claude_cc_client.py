@@ -32,8 +32,7 @@ import threading
 import time
 
 
-class BillingError(RuntimeError):
-    """Raised when the Claude subprocess exits due to insufficient credits."""
+from models import BillingError
 
 
 # Tools each agent is allowed to use. Restricting to specific MCP namespaces

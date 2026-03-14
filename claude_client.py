@@ -9,6 +9,7 @@ Every agent goes through here. This is what LangGraph's node execution replaces
 import json
 import os
 import anthropic
+from models import BillingError
 
 client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 
@@ -47,6 +48,11 @@ def _create(system_prompt: str, messages: list) -> str:
         )
     except anthropic.BadRequestError as e:
         msg = str(e).lower()
+        if "credit balance" in msg or "insufficient" in msg or "billing" in msg:
+            raise BillingError(
+                "Claude API credit balance is too low.\n"
+                "Top up at: https://console.anthropic.com/settings/plans"
+            ) from e
         if "prompt is too long" in msg or "context" in msg or "token" in msg:
             raise RuntimeError(
                 f"Context window exceeded: the combined prompt is too long for {MODEL}. "

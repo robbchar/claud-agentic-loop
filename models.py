@@ -10,6 +10,10 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 
+class BillingError(RuntimeError):
+    """Raised when an API call fails due to insufficient credits."""
+
+
 @dataclass
 class AgentResult:
     """

@@ -6,7 +6,7 @@ Manages the loop: Requirements → per-task Dev → QA → Reviewer → (repeat 
 import json
 import re
 from agents import pm_agent, dev_agent, qa_agent, reviewer_agent
-from claude_cc_client import BillingError
+from models import BillingError
 from models import SwarmState, AgentResult
 from scout import scan_project
 from spinner import Spinner

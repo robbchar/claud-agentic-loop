@@ -22,6 +22,9 @@ IGNORE_DIRS = {
 IGNORE_FILES = {
     ".DS_Store", "Thumbs.db", ".env", ".env.local", ".env.production",
     "swarm_run.json",
+    # Lock files — large, generated, never useful as dev context
+    "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
+    "composer.lock", "Gemfile.lock", "poetry.lock", "uv.lock",
 }
 
 FRAMEWORK_INDICATORS: dict[str, str] = {
