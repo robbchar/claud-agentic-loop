@@ -42,15 +42,25 @@ def run_swarm(state: SwarmState, verbose: bool = True) -> SwarmState:
         log(f"{'='*50}")
 
         # Dev
-        with Spinner("\n💻 [Dev Agent] Writing code") as sp:
-            result = dev_agent.run(state, spinner=sp)
+        try:
+            with Spinner("\n💻 [Dev Agent] Writing code") as sp:
+                result = dev_agent.run(state, spinner=sp)
+        except RuntimeError as e:
+            log(f"\n❌ [Dev Agent] failed: {e}")
+            log("Aborting run. Increase SWARM_CC_TIMEOUT or simplify the task.")
+            break
         state.code = result.output
         state.history.append({"agent": "dev", "iteration": iteration, "output": result.output})
         log(f"✅ Code written.\n{result.output}\n")
 
         # QA
-        with Spinner("\n🧪 [QA Agent] Testing code") as sp:
-            result = qa_agent.run(state, spinner=sp)
+        try:
+            with Spinner("\n🧪 [QA Agent] Testing code") as sp:
+                result = qa_agent.run(state, spinner=sp)
+        except RuntimeError as e:
+            log(f"\n❌ [QA Agent] failed: {e}")
+            log("Aborting run.")
+            break
         state.qa_report = result.output
         state.history.append({"agent": "qa", "iteration": iteration, "output": result.output})
         log(f"✅ QA report:\n{result.output}\n")
@@ -61,8 +71,13 @@ def run_swarm(state: SwarmState, verbose: bool = True) -> SwarmState:
             continue  # loop back to Dev with QA feedback
 
         # Reviewer (only if QA passed)
-        with Spinner("\n🔍 [Reviewer Agent] Reviewing code") as sp:
-            result = reviewer_agent.run(state, spinner=sp)
+        try:
+            with Spinner("\n🔍 [Reviewer Agent] Reviewing code") as sp:
+                result = reviewer_agent.run(state, spinner=sp)
+        except RuntimeError as e:
+            log(f"\n❌ [Reviewer Agent] failed: {e}")
+            log("Aborting run.")
+            break
         state.review = result.output
         state.history.append({"agent": "reviewer", "iteration": iteration, "output": result.output})
         log(f"✅ Review:\n{result.output}\n")

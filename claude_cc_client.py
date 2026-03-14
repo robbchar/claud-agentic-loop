@@ -56,7 +56,7 @@ def _build_cmd(
     return cmd
 
 
-_TIMEOUT = int(os.environ.get("SWARM_CC_TIMEOUT", "300"))
+_TIMEOUT = int(os.environ.get("SWARM_CC_TIMEOUT", "600"))
 
 
 def _run(cmd: list[str], label: str = "agent", spinner=None) -> str:
