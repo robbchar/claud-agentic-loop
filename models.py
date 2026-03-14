@@ -48,8 +48,12 @@ class SwarmState:
     # Feedback from QA or Reviewer → consumed by Dev on next iteration
     feedback: Optional[str] = None
 
-    # Set to True when Reviewer approves
+    # Set to True when all tasks complete
     approved: bool = False
+
+    # Per-task queue: populated from PM output, consumed one at a time by the loop
+    pending_tasks: list = field(default_factory=list)
+    completed_tasks: list = field(default_factory=list)
 
     # Conversation history for multi-turn dev agent (avoids re-sending growing code each iteration)
     dev_messages: list = field(default_factory=list)

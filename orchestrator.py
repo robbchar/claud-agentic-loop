@@ -1,13 +1,12 @@
 """
 Agent Swarm Orchestrator
-Manages the loop: Requirements → Dev → QA → Reviewer → (repeat or done)
+Manages the loop: Requirements → per-task Dev → QA → Reviewer → (repeat or done)
 """
 
-import json
-from dataclasses import dataclass, field
-from typing import Optional
+import re
 from agents import pm_agent, dev_agent, qa_agent, reviewer_agent
 from models import SwarmState, AgentResult
+from scout import scan_project
 from spinner import Spinner
 from writer import write_files
 
@@ -15,11 +14,56 @@ from writer import write_files
 MAX_ITERATIONS = 5
 
 
+def _split_tasks(pm_output: str) -> list[str]:
+    """
+    Parse PM output into individual per-task requirement strings.
+
+    Each returned string contains the milestone header, one task block,
+    and the global constraints — enough context for the Dev agent to work
+    on a single task without seeing the entire milestone at once.
+
+    Falls back to [pm_output] for simple/free-form inputs that don't
+    follow the structured PM output format (e.g. in tests).
+    """
+    if "TASKS:" not in pm_output or not re.search(r'\[\d+\.\d+\]', pm_output):
+        return [pm_output]
+
+    # Milestone header (first line starting with MILESTONE:)
+    milestone = next(
+        (l for l in pm_output.splitlines() if l.startswith("MILESTONE:")), ""
+    )
+
+    # Global constraints block (everything after GLOBAL CONSTRAINTS:)
+    constraints = ""
+    if "GLOBAL CONSTRAINTS:" in pm_output:
+        constraints = "\nGLOBAL CONSTRAINTS:" + pm_output.split("GLOBAL CONSTRAINTS:", 1)[1]
+
+    # Tasks section (between TASKS: and GLOBAL CONSTRAINTS:)
+    tasks_text = pm_output.split("TASKS:", 1)[1]
+    if "GLOBAL CONSTRAINTS:" in tasks_text:
+        tasks_text = tasks_text.split("GLOBAL CONSTRAINTS:", 1)[0]
+
+    # Split on blank line immediately before a task marker "  [X.Y]"
+    blocks = re.split(r'\n\n(?=  \[\d)', tasks_text.strip())
+
+    result = []
+    for block in blocks:
+        block = block.strip()
+        if block:
+            result.append(f"{milestone}\n\nTASK:\n  {block}{constraints}")
+
+    return result if result else [pm_output]
+
+
 def run_swarm(state: SwarmState, verbose: bool = True) -> SwarmState:
     """
-    Main entry point. Accepts a pre-built SwarmState (so callers can populate
-    spec docs or pre-set requirements before running), runs the full pipeline,
-    and returns the final state (including all artifacts produced).
+    Main entry point. Accepts a pre-built SwarmState, runs the full pipeline,
+    and returns the final state.
+
+    Phase 1: PM agent produces requirements and splits them into a task queue.
+    Phase 2: Each task runs its own Dev → QA → Reviewer loop independently.
+             Files are written after each task approval, and the project is
+             re-scanned so the next task's Dev agent sees what was just built.
     """
     def log(msg: str):
         if verbose:
@@ -35,69 +79,110 @@ def run_swarm(state: SwarmState, verbose: bool = True) -> SwarmState:
         state.history.append({"agent": "pm", "output": result.output})
         log(f"✅ Requirements done.\n{result.output}\n")
 
-    # --- Phase 2: Dev → QA → Reviewer loop ---
-    for iteration in range(1, MAX_ITERATIONS + 1):
+    # Populate task queue from PM output (only if not already set — allows
+    # callers to inject pending_tasks directly for testing or resumption)
+    if not state.pending_tasks:
+        state.pending_tasks = _split_tasks(state.requirements)
+        if len(state.pending_tasks) > 1:
+            log(f"\n📋 Split into {len(state.pending_tasks)} tasks — running each through Dev→QA→Reviewer separately.")
+
+    # --- Phase 2: per-task loop ---
+    while state.pending_tasks:
+        current_task = state.pending_tasks.pop(0)
+        task_num = len(state.completed_tasks) + 1
+        total_tasks = task_num + len(state.pending_tasks)
+
         log(f"\n{'='*50}")
-        log(f"🔁 Iteration {iteration}")
+        log(f"📋 Task {task_num}/{total_tasks}")
         log(f"{'='*50}")
+        log(current_task)
 
-        # Dev
-        try:
-            with Spinner("\n💻 [Dev Agent] Writing code") as sp:
-                result = dev_agent.run(state, spinner=sp)
-        except RuntimeError as e:
-            log(f"\n❌ [Dev Agent] failed: {e}")
-            log("Aborting run. Increase SWARM_CC_TIMEOUT or simplify the task.")
-            break
-        state.code = result.output
-        state.history.append({"agent": "dev", "iteration": iteration, "output": result.output})
-        log(f"✅ Code written.\n{result.output}\n")
+        # Reset per-task state so Dev starts fresh on each task
+        state.requirements = current_task
+        state.dev_messages = []
+        state.code = None
+        state.qa_report = None
+        state.review = None
+        state.feedback = None
 
-        # QA
-        try:
-            with Spinner("\n🧪 [QA Agent] Testing code") as sp:
-                result = qa_agent.run(state, spinner=sp)
-        except RuntimeError as e:
-            log(f"\n❌ [QA Agent] failed: {e}")
-            log("Aborting run.")
-            break
-        state.qa_report = result.output
-        state.history.append({"agent": "qa", "iteration": iteration, "output": result.output})
-        log(f"✅ QA report:\n{result.output}\n")
+        task_approved = False
 
-        if not result.passed:
-            log("❌ QA failed. Sending feedback to Dev agent for next iteration.")
-            state.feedback = result.feedback
-            continue  # loop back to Dev with QA feedback
+        for iteration in range(1, MAX_ITERATIONS + 1):
+            log(f"\n🔁 Iteration {iteration}")
 
-        # Reviewer (only if QA passed)
-        try:
-            with Spinner("\n🔍 [Reviewer Agent] Reviewing code") as sp:
-                result = reviewer_agent.run(state, spinner=sp)
-        except RuntimeError as e:
-            log(f"\n❌ [Reviewer Agent] failed: {e}")
-            log("Aborting run.")
-            break
-        state.review = result.output
-        state.history.append({"agent": "reviewer", "iteration": iteration, "output": result.output})
-        log(f"✅ Review:\n{result.output}\n")
+            # Dev
+            try:
+                with Spinner("\n💻 [Dev Agent] Writing code") as sp:
+                    result = dev_agent.run(state, spinner=sp)
+            except RuntimeError as e:
+                log(f"\n❌ [Dev Agent] failed: {e}")
+                log("Skipping task.")
+                break
+            state.code = result.output
+            state.history.append({"agent": "dev", "iteration": iteration, "task": task_num, "output": result.output})
+            log(f"✅ Code written.\n{result.output}\n")
 
-        if result.passed:
-            log(f"\n🎉 Code approved after {iteration} iteration(s)! Ready for PR.")
-            state.approved = True
-            state.feedback = None
-            written = write_files(state.code, state.output_dir)
-            if written:
-                log(f"\n[writer] Wrote {len(written)} file(s):")
-                for path in written:
-                    log(f"  {path}")
+            # QA
+            try:
+                with Spinner("\n🧪 [QA Agent] Testing code") as sp:
+                    result = qa_agent.run(state, spinner=sp)
+            except RuntimeError as e:
+                log(f"\n❌ [QA Agent] failed: {e}")
+                log("Skipping task.")
+                break
+            state.qa_report = result.output
+            state.history.append({"agent": "qa", "iteration": iteration, "task": task_num, "output": result.output})
+            log(f"✅ QA report:\n{result.output}\n")
+
+            if not result.passed:
+                log("❌ QA failed. Sending feedback to Dev agent for next iteration.")
+                state.feedback = result.feedback
+                continue
+
+            # Reviewer (only if QA passed)
+            try:
+                with Spinner("\n🔍 [Reviewer Agent] Reviewing code") as sp:
+                    result = reviewer_agent.run(state, spinner=sp)
+            except RuntimeError as e:
+                log(f"\n❌ [Reviewer Agent] failed: {e}")
+                log("Skipping task.")
+                break
+            state.review = result.output
+            state.history.append({"agent": "reviewer", "iteration": iteration, "task": task_num, "output": result.output})
+            log(f"✅ Review:\n{result.output}\n")
+
+            if result.passed:
+                log(f"\n✅ Task {task_num}/{total_tasks} approved after {iteration} iteration(s).")
+                task_approved = True
+                state.feedback = None
+
+                written = write_files(state.code, state.output_dir)
+                if written:
+                    log(f"\n[writer] Wrote {len(written)} file(s):")
+                    for path in written:
+                        log(f"  {path}")
+                else:
+                    log("\n[writer] No FILE blocks found in output — code printed above only.")
+
+                state.completed_tasks.append(current_task)
+
+                # Re-scan project so the next task's Dev agent sees files just written
+                if state.pending_tasks:
+                    state.project_context = scan_project(state.output_dir, interactive=False)
+                    log(f"\n[scout] Re-scanned project ({len(state.project_context):,} chars).")
+
+                break
             else:
-                log("\n[writer] No FILE blocks found in output — code printed above only.")
-            break
+                log("🔄 Reviewer requested changes. Sending feedback to Dev agent.")
+                state.feedback = result.feedback
         else:
-            log(f"🔄 Reviewer requested changes. Sending feedback to Dev agent.")
-            state.feedback = result.feedback
+            log(f"\n⚠️  Task {task_num}/{total_tasks} failed after {MAX_ITERATIONS} iterations — skipping.")
+
+    # --- Done ---
+    if state.completed_tasks:
+        log(f"\n🎉 Done! {len(state.completed_tasks)} task(s) completed.")
+        state.approved = True
     else:
-        log(f"\n⚠️  Max iterations ({MAX_ITERATIONS}) reached without approval.")
+        log(f"\n⚠️  No tasks completed.")
 
     return state

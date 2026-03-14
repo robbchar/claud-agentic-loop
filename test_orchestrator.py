@@ -1,9 +1,10 @@
-"""Tests for orchestrator.py — loop control, PM skip, iteration logic."""
+"""Tests for orchestrator.py — loop control, PM skip, iteration logic, per-task splitting."""
 
+import contextlib
 from unittest.mock import patch, MagicMock
 import pytest
 from models import SwarmState, AgentResult
-from orchestrator import run_swarm
+from orchestrator import run_swarm, _split_tasks, MAX_ITERATIONS
 
 
 def _make_pm_result(output="requirements text"):
@@ -24,6 +25,72 @@ def _make_reviewer_approved():
 def _make_reviewer_changes(feedback="add types"):
     return AgentResult(output="CHANGES REQUESTED", passed=False, feedback=feedback)
 
+
+# ---------------------------------------------------------------------------
+# _split_tasks
+# ---------------------------------------------------------------------------
+
+PM_OUTPUT_TWO_TASKS = """\
+MILESTONE: M1 — Core
+
+TASKS:
+  [1.1] Set up scaffold
+  Acceptance criteria:
+    - package.json exists
+    - server/index.js exists
+
+  [1.2] Add deck service
+  Acceptance criteria:
+    - server/services/deckService.js exists
+
+GLOBAL CONSTRAINTS:
+  - Node.js backend
+  - JSON storage"""
+
+
+class TestSplitTasks:
+    def test_simple_string_returns_single_task(self):
+        result = _split_tasks("build a rate limiter")
+        assert result == ["build a rate limiter"]
+
+    def test_splits_two_tasks(self):
+        result = _split_tasks(PM_OUTPUT_TWO_TASKS)
+        assert len(result) == 2
+
+    def test_each_task_contains_task_block(self):
+        result = _split_tasks(PM_OUTPUT_TWO_TASKS)
+        assert "1.1" in result[0]
+        assert "1.2" in result[1]
+
+    def test_each_task_contains_global_constraints(self):
+        result = _split_tasks(PM_OUTPUT_TWO_TASKS)
+        assert "GLOBAL CONSTRAINTS:" in result[0]
+        assert "Node.js backend" in result[0]
+        assert "GLOBAL CONSTRAINTS:" in result[1]
+
+    def test_each_task_contains_milestone(self):
+        result = _split_tasks(PM_OUTPUT_TWO_TASKS)
+        assert "MILESTONE: M1" in result[0]
+        assert "MILESTONE: M1" in result[1]
+
+    def test_tasks_do_not_contain_other_task_blocks(self):
+        result = _split_tasks(PM_OUTPUT_TWO_TASKS)
+        assert "1.2" not in result[0]
+        assert "1.1" not in result[1]
+
+    def test_no_tasks_section_returns_single(self):
+        result = _split_tasks("MILESTONE: M1\n\nsome freeform text")
+        assert len(result) == 1
+        assert result[0] == "MILESTONE: M1\n\nsome freeform text"
+
+    def test_empty_string_returns_single(self):
+        result = _split_tasks("")
+        assert result == [""]
+
+
+# ---------------------------------------------------------------------------
+# PM Phase
+# ---------------------------------------------------------------------------
 
 class TestRunSwarmPMPhase:
     def test_pm_runs_when_requirements_empty(self):
@@ -98,6 +165,10 @@ class TestRunSwarmPMPhase:
         assert len(pm_entries) == 0
 
 
+# ---------------------------------------------------------------------------
+# Single-task loop (backward-compatible behaviour)
+# ---------------------------------------------------------------------------
+
 class TestRunSwarmLoop:
     def test_approved_on_first_iteration(self):
         state = SwarmState()
@@ -130,7 +201,6 @@ class TestRunSwarmLoop:
     def test_qa_fail_sets_feedback_on_state(self):
         state = SwarmState()
         state.requirements = "reqs"
-        # Fail once then pass, then reviewer approves
         qa_results = [_make_qa_fail("fix X"), _make_qa_pass()]
         captured_feedback = []
 
@@ -145,7 +215,6 @@ class TestRunSwarmLoop:
             patch("orchestrator.reviewer_agent.run", return_value=_make_reviewer_approved()),
         ):
             run_swarm(state=state, verbose=False)
-        # Second dev call should have received the QA feedback
         assert captured_feedback[1] == "fix X"
 
     def test_reviewer_changes_loops_back_to_dev(self):
@@ -166,7 +235,6 @@ class TestRunSwarmLoop:
     def test_reviewer_not_called_when_qa_fails(self):
         state = SwarmState()
         state.requirements = "reqs"
-        # QA always fails — reviewer should never be called
         with (
             patch("orchestrator.pm_agent.run"),
             patch("orchestrator.dev_agent.run", return_value=_make_dev_result()),
@@ -216,3 +284,84 @@ class TestRunSwarmLoop:
         ):
             result = run_swarm(state=state, verbose=False)
         assert result.code == "def bar(): pass"
+
+
+# ---------------------------------------------------------------------------
+# Multi-task behaviour
+# ---------------------------------------------------------------------------
+
+class TestRunSwarmMultiTask:
+    def _run_two_tasks(self, state, dev_side_effect=None, qa_side_effect=None):
+        """Helper: run two-task swarm with standard mocks, return (result, scout_mock)."""
+        scout_mock = MagicMock(return_value="project context")
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(patch("orchestrator.pm_agent.run"))
+            stack.enter_context(patch("orchestrator.dev_agent.run",
+                side_effect=dev_side_effect or (lambda s, spinner=None: _make_dev_result())))
+            stack.enter_context(patch("orchestrator.qa_agent.run",
+                side_effect=qa_side_effect or (lambda s, spinner=None: _make_qa_pass())))
+            stack.enter_context(patch("orchestrator.reviewer_agent.run",
+                return_value=_make_reviewer_approved()))
+            stack.enter_context(patch("orchestrator.scan_project", scout_mock))
+            result = run_swarm(state=state, verbose=False)
+        return result, scout_mock
+
+    def test_two_tasks_both_run(self):
+        state = SwarmState()
+        state.requirements = PM_OUTPUT_TWO_TASKS
+        result, _ = self._run_two_tasks(state)
+        dev_calls = [h for h in result.history if h["agent"] == "dev"]
+        assert len(dev_calls) == 2
+
+    def test_two_tasks_both_completed(self):
+        state = SwarmState()
+        state.requirements = PM_OUTPUT_TWO_TASKS
+        result, _ = self._run_two_tasks(state)
+        assert len(result.completed_tasks) == 2
+
+    def test_approved_true_when_all_tasks_complete(self):
+        state = SwarmState()
+        state.requirements = PM_OUTPUT_TWO_TASKS
+        result, _ = self._run_two_tasks(state)
+        assert result.approved is True
+
+    def test_project_rescanned_between_tasks(self):
+        state = SwarmState()
+        state.requirements = PM_OUTPUT_TWO_TASKS
+        _, scout_mock = self._run_two_tasks(state)
+        # re-scan called once (after task 1, before task 2); not after the last task
+        assert scout_mock.call_count == 1
+
+    def test_dev_messages_reset_between_tasks(self):
+        state = SwarmState()
+        state.requirements = PM_OUTPUT_TWO_TASKS
+        dev_message_lengths = []
+
+        def capture_dev(s, spinner=None):
+            dev_message_lengths.append(len(s.dev_messages))
+            return _make_dev_result()
+
+        result, _ = self._run_two_tasks(state, dev_side_effect=capture_dev)
+        assert dev_message_lengths == [0, 0]
+
+    def test_failed_task_does_not_block_next(self):
+        state = SwarmState()
+        state.requirements = PM_OUTPUT_TWO_TASKS
+        # First task always fails QA; second passes
+        call_count = {"n": 0}
+        def qa_side_effect(s, spinner=None):
+            call_count["n"] += 1
+            # First MAX_ITERATIONS calls fail (task 1); then pass (task 2)
+            if call_count["n"] <= MAX_ITERATIONS:
+                return _make_qa_fail()
+            return _make_qa_pass()
+
+        result, _ = self._run_two_tasks(state, qa_side_effect=qa_side_effect)
+        assert len(result.completed_tasks) == 1   # only task 2 completes
+        assert result.approved is True
+
+    def test_no_rescan_after_last_task(self):
+        state = SwarmState()
+        state.requirements = PM_OUTPUT_TWO_TASKS
+        _, scout_mock = self._run_two_tasks(state)
+        assert scout_mock.call_count == 1
