@@ -359,7 +359,8 @@ class TestRunSwarmMultiTask:
 
         result, _ = self._run_two_tasks(state, qa_side_effect=qa_side_effect)
         assert len(result.completed_tasks) == 1   # only task 2 completes
-        assert result.approved is True
+        assert len(result._skipped_tasks) == 1    # task 1 was skipped
+        assert result.approved is False           # partial completion is not approved
 
     def test_no_rescan_after_last_task(self):
         state = SwarmState()

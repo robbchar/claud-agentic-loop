@@ -167,6 +167,7 @@ def run_swarm(state: SwarmState, verbose: bool = True, checkpoint_path: str | No
             except RuntimeError as e:
                 log(f"\n❌ [Dev Agent] failed: {e}")
                 log("Skipping task.")
+                state._skipped_tasks.append(current_task)
                 break
             state.code = result.output
             state.history.append({"agent": "dev", "iteration": iteration, "task": task_num, "output": result.output})
@@ -181,6 +182,7 @@ def run_swarm(state: SwarmState, verbose: bool = True, checkpoint_path: str | No
             except RuntimeError as e:
                 log(f"\n❌ [QA Agent] failed: {e}")
                 log("Skipping task.")
+                state._skipped_tasks.append(current_task)
                 break
             state.qa_report = result.output
             state.history.append({"agent": "qa", "iteration": iteration, "task": task_num, "output": result.output})
@@ -200,6 +202,7 @@ def run_swarm(state: SwarmState, verbose: bool = True, checkpoint_path: str | No
             except RuntimeError as e:
                 log(f"\n❌ [Reviewer Agent] failed: {e}")
                 log("Skipping task.")
+                state._skipped_tasks.append(current_task)
                 break
             state.review = result.output
             state.history.append({"agent": "reviewer", "iteration": iteration, "task": task_num, "output": result.output})
@@ -240,11 +243,23 @@ def run_swarm(state: SwarmState, verbose: bool = True, checkpoint_path: str | No
                 state.feedback = result.feedback
         else:
             log(f"\n⚠️  Task {task_num}/{total_tasks} failed after {MAX_ITERATIONS} iterations — skipping.")
+            state._skipped_tasks.append(current_task)
 
     # --- Done ---
-    if state.completed_tasks:
-        log(f"\n🎉 Done! {len(state.completed_tasks)} task(s) completed.")
+    total = len(state.completed_tasks) + len(state._skipped_tasks)
+    skipped = len(state._skipped_tasks)
+
+    if state.completed_tasks and skipped == 0:
+        log(f"\n🎉 Done! All {len(state.completed_tasks)} task(s) completed.")
         state.approved = True
+    elif state.completed_tasks and skipped > 0:
+        log(f"\n⚠️  Partial completion: {len(state.completed_tasks)}/{total} task(s) completed, {skipped} skipped.")
+        log("   Skipped tasks:")
+        for t in state._skipped_tasks:
+            m = re.search(r'\[(\d+\.\d+)\]', t)
+            log(f"   • [{m.group(1)}]" if m else f"   • (unknown)")
+        log("\n   Re-run to retry skipped tasks, or check the output and fix manually.")
+        state.approved = False
     else:
         log(f"\n⚠️  No tasks completed.")
 
