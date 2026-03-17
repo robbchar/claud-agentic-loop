@@ -75,7 +75,11 @@ class pm_agent:
             f"ARCHITECTURE DOCUMENT:\n{state.architecture}\n\n"
             f"TASKS DOCUMENT:\n{state.tasks_doc}"
         )
-        result = call_claude_json(PM_SYSTEM, prompt)
+        if _use_cc("pm"):
+            raw = call_claude_cc_json(PM_SYSTEM, prompt, "pm")
+            result = raw
+        else:
+            result = call_claude_json(PM_SYSTEM, prompt)
 
         tasks_text = ""
         for t in result.get("tasks", []):

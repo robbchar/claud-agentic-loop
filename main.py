@@ -24,9 +24,13 @@ MCP / Claude Code subprocess mode:
     while keeping tool access locked down via --allowedTools (no Bash, no file writes).
 
     Override which agents use the subprocess client:
-        SWARM_CC_AGENTS=dev,qa python main.py          # default
-        SWARM_CC_AGENTS=dev,qa,reviewer python main.py # pull reviewer in
-        SWARM_CC_AGENTS= python main.py                # disable for all (pure API mode)
+        SWARM_CC_AGENTS=dev,qa python main.py              # default
+        SWARM_CC_AGENTS=dev,qa,reviewer python main.py     # reviewer on subscription too
+        SWARM_CC_AGENTS=dev,qa,reviewer,pm python main.py  # all on subscription (no API cost)
+        SWARM_CC_AGENTS= python main.py                    # disable for all (pure API mode)
+
+    Note: PM produces structured JSON — the subprocess path is slightly less reliable
+    than the direct API for this. Recommended only if minimising API spend.
 
     Requires: `claude` CLI in PATH and an active Claude Code session.
 """
