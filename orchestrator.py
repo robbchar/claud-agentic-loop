@@ -168,6 +168,7 @@ def run_swarm(state: SwarmState, verbose: bool = True, checkpoint_path: str | No
                 log(f"\n❌ [Dev Agent] failed: {e}")
                 log("Skipping task.")
                 state._skipped_tasks.append(current_task)
+                state.history.append({"agent": "dev", "iteration": iteration, "task": task_num, "error": str(e), "skipped": True})
                 break
             state.code = result.output
             state.history.append({"agent": "dev", "iteration": iteration, "task": task_num, "output": result.output})
