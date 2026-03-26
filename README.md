@@ -42,7 +42,7 @@ feature_request  ──OR──  docs/ARCHITECTURE.md + docs/TASKS.md
 ## File Structure
 
 ```
-agent_swarm/
+agent_swarm/--architecture
 ├── main.py              # Entry point / CLI
 ├── orchestrator.py      # Loop control logic — the "brain"
 ├── agents.py            # All 4 agents (PM, Dev, QA, Reviewer)
@@ -250,7 +250,7 @@ configured MCP servers while keeping the swarm's isolation model intact.
 | ------------ | ---------------- | ---------------------------------------------------------------------------------- |
 | **PM**       | No               | — (direct API only)                                                                |
 | **Dev**      | Yes (default)    | `mcp__context7__`* — library doc lookups while writing code                        |
-| **QA**       | Yes (default)    | `mcp__chrome-devtools__`*, `mcp__context7__*` — browser verification + doc lookups |
+| **QA**       | Yes (default)    | `mcp__chrome-devtools__`*, `mcp__context7__`* — browser verification + doc lookups |
 | **Reviewer** | No (default)     | — (direct API only)                                                                |
 
 

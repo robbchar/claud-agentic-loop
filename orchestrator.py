@@ -154,13 +154,15 @@ def run_swarm(state: SwarmState, verbose: bool = True, checkpoint_path: str | No
         state.feedback = None
 
         task_approved = False
+        task_id_match = re.search(r'\[(\d+\.\d+)\]', current_task)
+        task_label = f" [{task_id_match.group(1)}]" if task_id_match else ""
 
         for iteration in range(1, MAX_ITERATIONS + 1):
             log(f"\n🔁 Iteration {iteration}")
 
             # Dev
             try:
-                with Spinner("\n💻 [Dev Agent] Writing code") as sp:
+                with Spinner(f"\n💻 [Dev Agent] Writing code{task_label}") as sp:
                     result = dev_agent.run(state, spinner=sp)
             except BillingError:
                 raise
@@ -176,7 +178,7 @@ def run_swarm(state: SwarmState, verbose: bool = True, checkpoint_path: str | No
 
             # QA
             try:
-                with Spinner("\n🧪 [QA Agent] Testing code") as sp:
+                with Spinner(f"\n🧪 [QA Agent] Testing code{task_label}") as sp:
                     result = qa_agent.run(state, spinner=sp)
             except BillingError:
                 raise
@@ -196,7 +198,7 @@ def run_swarm(state: SwarmState, verbose: bool = True, checkpoint_path: str | No
 
             # Reviewer (only if QA passed)
             try:
-                with Spinner("\n🔍 [Reviewer Agent] Reviewing code") as sp:
+                with Spinner(f"\n🔍 [Reviewer Agent] Reviewing code{task_label}") as sp:
                     result = reviewer_agent.run(state, spinner=sp)
             except BillingError:
                 raise
