@@ -86,13 +86,20 @@ def call_claude(
     text = _create(system_prompt, [{"role": "user", "content": user_message}])
 
     if expect_json:
-        # Strip ```json ... ``` fences if the model adds them anyway
         text = text.strip()
-        if text.startswith("```"):
+        # Extract JSON from a fenced block even when prose precedes it.
+        extracted = False
+        for fence in ("```json\n", "```\n"):
+            if fence in text:
+                after = text.split(fence, 1)[1]
+                text = after.rsplit("```", 1)[0].strip()
+                extracted = True
+                break
+        if not extracted and text.startswith("```"):
             text = text.split("\n", 1)[-1]
             text = text.rsplit("```", 1)[0]
         text = text.strip()
-        # Strip preamble text before the JSON object/array
+        # Last-resort: strip any prose before the first { or [
         if not (text.startswith("{") or text.startswith("[")):
             for marker in ("{", "["):
                 idx = text.find(marker)

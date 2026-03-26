@@ -214,7 +214,10 @@ def main():
     args = parser.parse_args()
 
     if not args.dry_run:
-        _check_env()
+        from agents import CC_AGENTS
+        _api_agents = {"dev", "qa", "reviewer", "pm"} - CC_AGENTS
+        if _api_agents:
+            _check_env()
 
     # Validate sandbox at startup so failures are obvious, not cryptic mid-run
     if os.environ.get("SWARM_SANDBOX", "false").lower() == "true":

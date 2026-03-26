@@ -188,14 +188,20 @@ def call_claude_cc(
 
     if expect_json:
         text = text.strip()
-        if text.startswith("```"):
+        # Extract JSON from a fenced block even when prose precedes it.
+        # The model often outputs analysis, then wraps the JSON in ```json ... ```.
+        extracted = False
+        for fence in ("```json\n", "```\n"):
+            if fence in text:
+                after = text.split(fence, 1)[1]
+                text = after.rsplit("```", 1)[0].strip()
+                extracted = True
+                break
+        if not extracted and text.startswith("```"):
             text = text.split("\n", 1)[-1]
             text = text.rsplit("```", 1)[0]
         text = text.strip()
-        # Strip any preamble text that precedes the JSON object/array.
-        # Agents sometimes output an explanation before the JSON despite being
-        # told not to — find the first { or [ and discard everything before it.
-        # Only search if the text doesn't already start with a JSON opener.
+        # Last-resort: strip any prose before the first { or [
         if not (text.startswith('{') or text.startswith('[')):
             for marker in ('{', '['):
                 idx = text.find(marker)

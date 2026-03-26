@@ -59,18 +59,18 @@ agent_swarm/
 ### What each file is responsible for
 
 
-| File                 | Responsibility                                                                          |
-| -------------------- | --------------------------------------------------------------------------------------- |
-| `models.py`          | Shared state. The single object passed between all agents.                              |
-| `claude_client.py`   | Direct Anthropic API calls. Used by PM and Reviewer agents.                             |
-| `claude_cc_client.py`| Shells out to `claude -p` with `--allowedTools`. Used by Dev and QA for MCP access.    |
-| `agents.py`          | System prompts + prompt assembly + response parsing for each agent.                     |
-| `orchestrator.py`    | The loop: decides when to advance, retry, or stop. Calls writer after approval.         |
-| `main.py`            | CLI glue. Runs scout, passes args, prints summary, dumps history.                       |
-| `scout.py`           | Walks the output directory, detects framework, reads existing files into project context.|
-| `writer.py`          | Parses `--- FILE: path ---` blocks from approved code and writes them to disk.          |
-| `sandbox.py`         | Runs generated code in an isolated Podman container. Off by default.                    |
-| `Dockerfile.sandbox` | Defines the sandbox image with pre-installed packages for generated code.               |
+| File                  | Responsibility                                                                            |
+| --------------------- | ----------------------------------------------------------------------------------------- |
+| `models.py`           | Shared state. The single object passed between all agents.                                |
+| `claude_client.py`    | Direct Anthropic API calls. Used by PM and Reviewer agents.                               |
+| `claude_cc_client.py` | Shells out to `claude -p` with `--allowedTools`. Used by Dev and QA for MCP access.       |
+| `agents.py`           | System prompts + prompt assembly + response parsing for each agent.                       |
+| `orchestrator.py`     | The loop: decides when to advance, retry, or stop. Calls writer after approval.           |
+| `main.py`             | CLI glue. Runs scout, passes args, prints summary, dumps history.                         |
+| `scout.py`            | Walks the output directory, detects framework, reads existing files into project context. |
+| `writer.py`           | Parses `--- FILE: path ---` blocks from approved code and writes them to disk.            |
+| `sandbox.py`          | Runs generated code in an isolated Podman container. Off by default.                      |
+| `Dockerfile.sandbox`  | Defines the sandbox image with pre-installed packages for generated code.                 |
 
 
 ## Setup
@@ -245,12 +245,14 @@ configured MCP servers while keeping the swarm's isolation model intact.
 
 ### What each agent can access
 
-| Agent | Uses subprocess? | Allowed MCP tools |
-|---|---|---|
-| **PM** | No | — (direct API only) |
-| **Dev** | Yes (default) | `mcp__context7__*` — library doc lookups while writing code |
-| **QA** | Yes (default) | `mcp__chrome-devtools__*`, `mcp__context7__*` — browser verification + doc lookups |
-| **Reviewer** | No (default) | — (direct API only) |
+
+| Agent        | Uses subprocess? | Allowed MCP tools                                                                  |
+| ------------ | ---------------- | ---------------------------------------------------------------------------------- |
+| **PM**       | No               | — (direct API only)                                                                |
+| **Dev**      | Yes (default)    | `mcp__context7__`* — library doc lookups while writing code                        |
+| **QA**       | Yes (default)    | `mcp__chrome-devtools__`*, `mcp__context7__*` — browser verification + doc lookups |
+| **Reviewer** | No (default)     | — (direct API only)                                                                |
+
 
 ### Isolation
 
