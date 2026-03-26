@@ -67,6 +67,12 @@ def test_build_cmd_includes_stream_json_output_format():
     assert cmd[idx + 1] == "stream-json"
 
 
+def test_build_cmd_includes_verbose():
+    # stream-json requires --verbose with -p
+    cmd = _build_cmd("sys", [])
+    assert "--verbose" in cmd
+
+
 def test_build_cmd_does_not_include_user_message():
     cmd = _build_cmd("sys", [])
     assert "hello" not in cmd

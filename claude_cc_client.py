@@ -56,6 +56,7 @@ def _build_cmd(
     cmd = [
         "claude", "-p",
         "--output-format", "stream-json",
+        "--verbose",
         "--system-prompt", system_prompt,
     ]
     if allowed_tools:
