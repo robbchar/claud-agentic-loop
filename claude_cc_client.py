@@ -150,6 +150,9 @@ def _run(cmd: list[str], user_message: str, label: str = "agent", spinner=None) 
 
             etype = event.get("type")
 
+            if os.environ.get("SWARM_DEBUG_EVENTS"):
+                print(f"\r[event] {etype}", flush=True)
+
             if etype == "assistant":
                 for block in event.get("message", {}).get("content", []):
                     btype = block.get("type")
@@ -171,6 +174,13 @@ def _run(cmd: list[str], user_message: str, label: str = "agent", spinner=None) 
 
             elif etype == "result":
                 result_text = event.get("result") or ""
+                if event.get("is_error") and result_text:
+                    combined = result_text.lower()
+                    if any(kw in combined for kw in ("credit balance", "insufficient", "billing", "quota", "usage limit")):
+                        raise BillingError(
+                            "Claude Code credit balance is too low.\n"
+                            "Top up at: https://claude.ai/settings/billing"
+                        )
                 if result_text:
                     final_result.append(result_text)
 
@@ -215,7 +225,7 @@ def _run(cmd: list[str], user_message: str, label: str = "agent", spinner=None) 
         # result event may already hold an error message
         stdout_text = (final_result[0] if final_result else "".join(collected)).strip()
         combined = f"{stdout_text}\n{stderr_text}".lower()
-        if "credit balance" in combined or "insufficient" in combined or "billing" in combined:
+        if any(kw in combined for kw in ("credit balance", "insufficient", "billing", "quota", "usage limit")):
             raise BillingError(
                 "Claude Code credit balance is too low.\n"
                 "Top up at: https://claude.ai/settings/billing"

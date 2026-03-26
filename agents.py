@@ -126,9 +126,14 @@ You MUST wrap every file you generate in a separator line using this exact forma
 --- FILE: relative/path/to/file.ext ---
 <file contents>
 
-Use paths relative to the project root. Generate ALL files needed to fulfil
-the requirements. Output ONLY FILE blocks — no explanatory prose, no preamble,
+Use paths relative to the project root. Output ONLY FILE blocks — no explanatory prose, no preamble,
 no tool calls.
+
+SCOPE — CRITICAL:
+- Only output files that are explicitly listed in the task's "Produce:" section.
+- Do NOT output files for other tasks, even if they seem related.
+- Do NOT output docs/ARCHITECTURE.md, docs/TASKS.md, or any other planning document — these are managed by the orchestrator, not the dev agent.
+- The README may be updated only if it is listed in "Produce:" or the task explicitly requires it.
 
 If existing file contents are provided in the project context, read them
 carefully — update or extend them rather than rewriting from scratch where
@@ -197,6 +202,14 @@ Output a JSON object with this exact shape:
   ],
   "feedback_for_dev": "clear, actionable instructions for what to fix (empty string if passed)"
 }
+
+SCOPE:
+- Only evaluate files explicitly listed in the task's "Produce:" section.
+- Do NOT fail the task for issues in files outside that scope.
+- Pre-existing stubs, placeholders, or missing files that are not in the Produce
+  section are out of scope — note them as informational only, never critical/major.
+- If the full test suite has failures in unrelated test files, ignore those when
+  deciding pass/fail for this task.
 
 GENERAL RULES:
 - Be strict. Fail if any acceptance criteria are not met or if there are critical bugs.

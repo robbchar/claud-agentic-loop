@@ -45,6 +45,13 @@ def _mark_task_complete(tasks_doc_path: str, task_id: str) -> None:
                     break  # hit the next section without finding a status line
 
 
+def _provisional_write(code: str, output_dir: str, log) -> None:
+    """Write dev output to disk before QA so tests run against real files."""
+    written = write_files(code, output_dir)
+    if written:
+        log(f"\n[writer] Provisional: wrote {len(written)} file(s) for QA")
+
+
 def _write_checkpoint(state: SwarmState, original_requirements: str, path: str) -> None:
     """Persist enough state to resume a crashed run via --resume.
 
@@ -187,7 +194,12 @@ def run_swarm(state: SwarmState, verbose: bool = True, checkpoint_path: str | No
                 break
             state.code = result.output
             state.history.append({"agent": "dev", "iteration": iteration, "task": task_num, "output": result.output})
-            log(f"✅ Code written.\n{result.output}\n")
+            log(f"✅ Code written.")
+
+            # Provisional write — put files on disk before QA runs so the test
+            # suite can import and exercise them. If QA or Reviewer rejects, the
+            # next iteration's dev output will overwrite these.
+            _provisional_write(state.code, state.output_dir, log)
 
             # QA
             try:
