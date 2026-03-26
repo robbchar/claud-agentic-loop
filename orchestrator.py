@@ -4,6 +4,7 @@ Manages the loop: Requirements → per-task Dev → QA → Reviewer → (repeat 
 """
 
 import json
+import os
 import re
 from agents import pm_agent, dev_agent, qa_agent, reviewer_agent
 from models import BillingError
@@ -45,7 +46,11 @@ def _mark_task_complete(tasks_doc_path: str, task_id: str) -> None:
 
 
 def _write_checkpoint(state: SwarmState, original_requirements: str, path: str) -> None:
-    """Persist enough state to resume a crashed run via --resume."""
+    """Persist enough state to resume a crashed run via --resume.
+
+    Writes to a temp file first, then renames atomically so a failed write
+    never leaves the checkpoint file truncated to 0 bytes.
+    """
     data = {
         "version": 1,
         "feature_request": state.feature_request,
@@ -53,10 +58,16 @@ def _write_checkpoint(state: SwarmState, original_requirements: str, path: str) 
         "requirements": original_requirements,
         "completed_tasks": state.completed_tasks,
         "pending_tasks": state.pending_tasks,
+        "skipped_tasks": [
+            {"task": t, "reason": state._skip_reasons[i] if i < len(state._skip_reasons) else "unknown"}
+            for i, t in enumerate(state._skipped_tasks)
+        ],
         "history": state.history,
     }
-    with open(path, "w", encoding="utf-8") as f:
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
+    os.replace(tmp, path)
 
 
 def _split_tasks(pm_output: str) -> list[str]:
@@ -167,9 +178,11 @@ def run_swarm(state: SwarmState, verbose: bool = True, checkpoint_path: str | No
             except BillingError:
                 raise
             except RuntimeError as e:
-                log(f"\n❌ [Dev Agent] failed: {e}")
+                reason = f"Dev agent failed: {e}"
+                log(f"\n❌ {reason}")
                 log("Skipping task.")
                 state._skipped_tasks.append(current_task)
+                state._skip_reasons.append(reason)
                 state.history.append({"agent": "dev", "iteration": iteration, "task": task_num, "error": str(e), "skipped": True})
                 break
             state.code = result.output
@@ -183,9 +196,11 @@ def run_swarm(state: SwarmState, verbose: bool = True, checkpoint_path: str | No
             except BillingError:
                 raise
             except RuntimeError as e:
-                log(f"\n❌ [QA Agent] failed: {e}")
+                reason = f"QA agent failed: {e}"
+                log(f"\n❌ {reason}")
                 log("Skipping task.")
                 state._skipped_tasks.append(current_task)
+                state._skip_reasons.append(reason)
                 break
             state.qa_report = result.output
             state.history.append({"agent": "qa", "iteration": iteration, "task": task_num, "output": result.output})
@@ -203,9 +218,11 @@ def run_swarm(state: SwarmState, verbose: bool = True, checkpoint_path: str | No
             except BillingError:
                 raise
             except RuntimeError as e:
-                log(f"\n❌ [Reviewer Agent] failed: {e}")
+                reason = f"Reviewer agent failed: {e}"
+                log(f"\n❌ {reason}")
                 log("Skipping task.")
                 state._skipped_tasks.append(current_task)
+                state._skip_reasons.append(reason)
                 break
             state.review = result.output
             state.history.append({"agent": "reviewer", "iteration": iteration, "task": task_num, "output": result.output})
@@ -245,8 +262,10 @@ def run_swarm(state: SwarmState, verbose: bool = True, checkpoint_path: str | No
                 log("🔄 Reviewer requested changes. Sending feedback to Dev agent.")
                 state.feedback = result.feedback
         else:
+            reason = f"Exhausted {MAX_ITERATIONS} iterations without approval"
             log(f"\n⚠️  Task {task_num}/{total_tasks} failed after {MAX_ITERATIONS} iterations — skipping.")
             state._skipped_tasks.append(current_task)
+            state._skip_reasons.append(reason)
 
     # --- Done ---
     total = len(state.completed_tasks) + len(state._skipped_tasks)
@@ -258,9 +277,11 @@ def run_swarm(state: SwarmState, verbose: bool = True, checkpoint_path: str | No
     elif state.completed_tasks and skipped > 0:
         log(f"\n⚠️  Partial completion: {len(state.completed_tasks)}/{total} task(s) completed, {skipped} skipped.")
         log("   Skipped tasks:")
-        for t in state._skipped_tasks:
+        for i, t in enumerate(state._skipped_tasks):
             m = re.search(r'\[(\d+\.\d+)\]', t)
-            log(f"   • [{m.group(1)}]" if m else f"   • (unknown)")
+            label = f"[{m.group(1)}]" if m else "(unknown)"
+            reason = state._skip_reasons[i] if i < len(state._skip_reasons) else "unknown"
+            log(f"   • {label}  ← {reason}")
         log("\n   Re-run to retry skipped tasks, or check the output and fix manually.")
         state.approved = False
     else:

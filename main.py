@@ -324,8 +324,10 @@ def main():
         print("\n--- FINAL CODE ---")
         print(state.code)
 
-    # Final checkpoint write (also written incrementally after each task by orchestrator)
-    with open(checkpoint_path, "w", encoding="utf-8") as f:
+    # Final checkpoint write — atomic replace so a failure here doesn't wipe
+    # the incremental checkpoint written after each completed task.
+    tmp = checkpoint_path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump({
             "version": 1,
             "feature_request": state.feature_request,
@@ -333,8 +335,13 @@ def main():
             "requirements": state.requirements or "",
             "completed_tasks": state.completed_tasks,
             "pending_tasks": state.pending_tasks,
+            "skipped_tasks": [
+                {"task": t, "reason": state._skip_reasons[i] if i < len(state._skip_reasons) else "unknown"}
+                for i, t in enumerate(state._skipped_tasks)
+            ],
             "history": state.history,
         }, f, indent=2)
+    os.replace(tmp, checkpoint_path)
     print(f"\nFull history written to {checkpoint_path}")
 
     if state.approved:

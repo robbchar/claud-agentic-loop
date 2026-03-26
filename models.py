@@ -62,6 +62,8 @@ class SwarmState:
     pending_tasks: list = field(default_factory=list)
     completed_tasks: list = field(default_factory=list)
     _skipped_tasks: list = field(default_factory=list)
+    # Parallel list to _skipped_tasks — stores the reason each task was skipped
+    _skip_reasons: list = field(default_factory=list)
 
     # Conversation history for multi-turn dev agent (avoids re-sending growing code each iteration)
     dev_messages: list = field(default_factory=list)
