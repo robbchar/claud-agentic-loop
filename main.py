@@ -244,19 +244,33 @@ def main():
 
         completed = checkpoint.get("completed_tasks", [])
         pending = checkpoint.get("pending_tasks", [])
-        print(f"[resume] Loaded checkpoint: {args.resume}")
-        print(f"[resume] {len(completed)} task(s) done, {len(pending)} remaining")
+        # Skipped tasks are re-queued so --resume retries them.
+        skipped_entries = checkpoint.get("skipped_tasks", [])
+        skipped = [e["task"] if isinstance(e, dict) else e for e in skipped_entries]
+        retry = skipped + pending  # skipped first so they run before any remaining tasks
 
-        if not pending:
-            print("[resume] No pending tasks — nothing to do.")
+        print(f"[resume] Loaded checkpoint: {args.resume}")
+        print(f"[resume] {len(completed)} task(s) done, {len(skipped)} skipped (will retry), {len(pending)} pending")
+
+        if not retry:
+            print("[resume] No pending or skipped tasks — nothing to do.")
             return
+
+        if skipped:
+            for e in skipped_entries:
+                task_text = e["task"] if isinstance(e, dict) else e
+                reason = e.get("reason", "unknown") if isinstance(e, dict) else "unknown"
+                import re as _re
+                m = _re.search(r'\[(\d+\.\d+\w*)\]', task_text)
+                label = f"[{m.group(1)}]" if m else "(unknown)"
+                print(f"[resume]   retrying {label}  ← was skipped: {reason}")
 
         state = SwarmState(
             feature_request=checkpoint.get("feature_request", ""),
             output_dir=checkpoint.get("output_dir", args.output_dir),
             requirements=checkpoint.get("requirements") or "resumed",
             completed_tasks=completed,
-            pending_tasks=pending,
+            pending_tasks=retry,
         )
     else:
         # --- Normal startup ---
