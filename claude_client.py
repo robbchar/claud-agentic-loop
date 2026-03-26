@@ -9,6 +9,7 @@ Every agent goes through here. This is what LangGraph's node execution replaces
 import json
 import os
 import anthropic
+from models import BillingError
 
 client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 
@@ -47,6 +48,11 @@ def _create(system_prompt: str, messages: list) -> str:
         )
     except anthropic.BadRequestError as e:
         msg = str(e).lower()
+        if "credit balance" in msg or "insufficient" in msg or "billing" in msg:
+            raise BillingError(
+                "Claude API credit balance is too low.\n"
+                "Top up at: https://console.anthropic.com/settings/plans"
+            ) from e
         if "prompt is too long" in msg or "context" in msg or "token" in msg:
             raise RuntimeError(
                 f"Context window exceeded: the combined prompt is too long for {MODEL}. "
@@ -80,11 +86,26 @@ def call_claude(
     text = _create(system_prompt, [{"role": "user", "content": user_message}])
 
     if expect_json:
-        # Strip ```json ... ``` fences if the model adds them anyway
         text = text.strip()
-        if text.startswith("```"):
+        # Extract JSON from a fenced block even when prose precedes it.
+        extracted = False
+        for fence in ("```json\n", "```\n"):
+            if fence in text:
+                after = text.split(fence, 1)[1]
+                text = after.rsplit("```", 1)[0].strip()
+                extracted = True
+                break
+        if not extracted and text.startswith("```"):
             text = text.split("\n", 1)[-1]
             text = text.rsplit("```", 1)[0]
+        text = text.strip()
+        # Last-resort: strip any prose before the first { or [
+        if not (text.startswith("{") or text.startswith("[")):
+            for marker in ("{", "["):
+                idx = text.find(marker)
+                if idx > 0:
+                    text = text[idx:]
+                    break
         text = text.strip()
 
     return text

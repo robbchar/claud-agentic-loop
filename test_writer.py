@@ -3,7 +3,7 @@
 from pathlib import Path
 import pytest
 
-from writer import parse_files, write_files
+from writer import parse_files, write_files, _strip_fences
 
 
 SINGLE_FILE_CODE = """\
@@ -30,6 +30,55 @@ NO_SEPARATOR_CODE = """\
 def hello():
     return "hello"
 """
+
+
+FENCED_FILE_CODE = """\
+--- FILE: package.json ---
+```json
+{"name": "my-app"}
+```
+
+--- FILE: src/index.js ---
+```javascript
+console.log('hi');
+```
+"""
+
+PLAIN_FILE_CODE = """\
+--- FILE: plain.py ---
+x = 1
+"""
+
+
+class TestStripFences:
+    def test_strips_json_fence(self):
+        assert _strip_fences('```json\n{"a":1}\n```') == '{"a":1}\n'
+
+    def test_strips_generic_fence(self):
+        assert _strip_fences('```\nhello\n```') == 'hello\n'
+
+    def test_leaves_plain_content_unchanged(self):
+        assert _strip_fences('x = 1') == 'x = 1'
+
+    def test_leaves_partial_fence_unchanged(self):
+        # Only one fence marker — should not strip
+        assert '```' in _strip_fences('```json\n{"a":1}')
+
+
+class TestParseFilesWithFences:
+    def test_fenced_json_content_is_stripped(self):
+        files = dict(parse_files(FENCED_FILE_CODE))
+        assert '```' not in files["package.json"]
+        assert '"name"' in files["package.json"]
+
+    def test_fenced_js_content_is_stripped(self):
+        files = dict(parse_files(FENCED_FILE_CODE))
+        assert '```' not in files["src/index.js"]
+        assert "console.log" in files["src/index.js"]
+
+    def test_plain_content_unchanged(self):
+        files = dict(parse_files(PLAIN_FILE_CODE))
+        assert files["plain.py"].strip() == "x = 1"
 
 
 class TestParseFiles:

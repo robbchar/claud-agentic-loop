@@ -13,11 +13,24 @@ and is exactly what LangGraph would model as individual graph nodes.
 import os
 
 from claude_client import call_claude, call_claude_json, call_claude_messages
+from claude_cc_client import call_claude_cc, call_claude_cc_json, call_claude_cc_messages
 from models import SwarmState, AgentResult
 
 # Sandbox is opt-in — set SWARM_SANDBOX=true to enable container execution.
 # If false, QA does static analysis only (no code execution).
 SANDBOX_ENABLED = os.environ.get("SWARM_SANDBOX", "false").lower() == "true"
+
+# Agents that shell out to `claude -p` to inherit local MCP servers.
+# Default: dev and qa. Override at runtime: SWARM_CC_AGENTS=dev,qa,reviewer
+# Set to empty string to disable for all agents: SWARM_CC_AGENTS=
+_cc_agents_raw = os.environ.get("SWARM_CC_AGENTS", "dev,qa")
+CC_AGENTS: frozenset[str] = frozenset(
+    a.strip().lower() for a in _cc_agents_raw.split(",") if a.strip()
+)
+
+
+def _use_cc(agent_name: str) -> bool:
+    return agent_name in CC_AGENTS
 
 
 # =============================================================================
@@ -62,7 +75,11 @@ class pm_agent:
             f"ARCHITECTURE DOCUMENT:\n{state.architecture}\n\n"
             f"TASKS DOCUMENT:\n{state.tasks_doc}"
         )
-        result = call_claude_json(PM_SYSTEM, prompt)
+        if _use_cc("pm"):
+            raw = call_claude_cc_json(PM_SYSTEM, prompt, "pm")
+            result = raw
+        else:
+            result = call_claude_json(PM_SYSTEM, prompt)
 
         tasks_text = ""
         for t in result.get("tasks", []):
@@ -94,9 +111,14 @@ class pm_agent:
 DEV_SYSTEM = """
 You are a senior software engineer. Write clean, production-quality code.
 
-- Include docstrings and type hints
 - Handle edge cases mentioned in requirements
 - If feedback is provided, address every point explicitly
+
+CRITICAL — HEADLESS / NON-INTERACTIVE MODE:
+You are running via `claude --print` with no terminal attached.
+You MUST NOT use Write, Edit, Read, Bash, or any other tool.
+Any tool call will stall indefinitely because there is no one to approve it.
+Your ONLY output mechanism is plain text. The orchestrator writes files to disk.
 
 FILE OUTPUT FORMAT:
 You MUST wrap every file you generate in a separator line using this exact format:
@@ -104,13 +126,27 @@ You MUST wrap every file you generate in a separator line using this exact forma
 --- FILE: relative/path/to/file.ext ---
 <file contents>
 
-Use paths relative to the project root. Generate ALL files needed to fulfil
-the requirements. Do not output any text outside of FILE blocks.
+Use paths relative to the project root. Output ONLY FILE blocks — no explanatory prose, no preamble,
+no tool calls.
+
+SCOPE — CRITICAL:
+- Only output files that are explicitly listed in the task's "Produce:" section.
+- Do NOT output files for other tasks, even if they seem related.
+- Do NOT output docs/ARCHITECTURE.md, docs/TASKS.md, or any other planning document — these are managed by the orchestrator, not the dev agent.
+- The README may be updated only if it is listed in "Produce:" or the task explicitly requires it.
 
 If existing file contents are provided in the project context, read them
 carefully — update or extend them rather than rewriting from scratch where
 appropriate. If a file needs to be replaced entirely, output the full new
 contents inside its FILE block.
+
+TESTING REQUIREMENTS:
+Every task must include tests. For frontend code specifically:
+- Every component MUST have a "renders without crashing" test as a baseline
+- Tests must wrap components in ALL required providers (React Router, Context, etc.)
+  — a component that crashes on mount due to missing provider is a critical failure
+- Test the wiring: verify that context values flow correctly to child components
+- Use vitest + @testing-library/react for React components
 
 RUNTIME ENVIRONMENT (when no project context is provided):
 Your code runs inside an isolated container. The constraints are:
@@ -122,7 +158,7 @@ Your code runs inside an isolated container. The constraints are:
 
 class dev_agent:
     @staticmethod
-    def run(state: SwarmState) -> AgentResult:
+    def run(state: SwarmState, spinner=None) -> AgentResult:
         if not state.dev_messages:
             # First iteration: seed the conversation with requirements (+ project context)
             user_content = f"REQUIREMENTS:\n{state.requirements}"
@@ -137,7 +173,10 @@ class dev_agent:
                 "content": f"FEEDBACK TO ADDRESS:\n{state.feedback}",
             })
 
-        code = call_claude_messages(DEV_SYSTEM, state.dev_messages)
+        if _use_cc("dev"):
+            code = call_claude_cc_messages(DEV_SYSTEM, state.dev_messages, "dev", spinner=spinner)
+        else:
+            code = call_claude_messages(DEV_SYSTEM, state.dev_messages)
 
         # Store the assistant turn so the next iteration has full context without re-sending code
         state.dev_messages.append({"role": "assistant", "content": code})
@@ -150,7 +189,9 @@ class dev_agent:
 # =============================================================================
 
 QA_SYSTEM = """
-You are a QA engineer. Review the provided code against the requirements.
+You are a QA engineer. Your job is to verify that code actually works, not just
+that it looks correct. Static analysis is not enough — you must reason about
+runtime behaviour.
 
 Output a JSON object with this exact shape:
 {
@@ -162,13 +203,37 @@ Output a JSON object with this exact shape:
   "feedback_for_dev": "clear, actionable instructions for what to fix (empty string if passed)"
 }
 
-Be strict. Fail if any acceptance criteria are not met or if there are critical bugs.
-If actual execution results are provided, treat runtime errors as critical issues.
+SCOPE:
+- Only evaluate files explicitly listed in the task's "Produce:" section.
+- Do NOT fail the task for issues in files outside that scope.
+- Pre-existing stubs, placeholders, or missing files that are not in the Produce
+  section are out of scope — note them as informational only, never critical/major.
+- If the full test suite has failures in unrelated test files, ignore those when
+  deciding pass/fail for this task.
+
+GENERAL RULES:
+- Be strict. Fail if any acceptance criteria are not met or if there are critical bugs.
+- If actual execution results are provided, treat runtime errors as critical issues.
+- Placeholder implementations, stub functions, or "TODO: implement later" comments
+  are CRITICAL failures — the code must be complete and functional.
+
+FRONTEND-SPECIFIC CHECKS (apply whenever the task involves React/UI):
+- CRITICAL: Every component must have a "renders without crashing" test. If it is
+  missing, fail immediately.
+- CRITICAL: Check that every component using a React hook (useContext, useReducer,
+  etc.) is wrapped in the required provider in both the app entry point AND in its
+  tests. A missing provider causes a runtime crash — this is not a minor issue.
+- CRITICAL: Verify the app entry point (main.jsx or index.jsx) correctly composes
+  all providers and the router around the component tree. Trace the import chain.
+- MAJOR: Tests that render a component without its required providers will pass
+  locally but crash in the real app — flag this as a major issue.
+- Check that routing is wired correctly and navigation between pages works.
+- Verify that API calls use the correct base paths and will reach the Express server.
 """
 
 class qa_agent:
     @staticmethod
-    def run(state: SwarmState) -> AgentResult:
+    def run(state: SwarmState, spinner=None) -> AgentResult:
         # If sandbox is enabled, actually execute the code and include
         # the real output in the QA prompt. This gives Claude real
         # runtime behavior rather than just static analysis.
@@ -190,7 +255,10 @@ class qa_agent:
             f"CODE TO REVIEW:\n{state.code}"
             f"{execution_block}"
         )
-        result = call_claude_json(QA_SYSTEM, prompt)
+        if _use_cc("qa"):
+            result = call_claude_cc_json(QA_SYSTEM, prompt, "qa", spinner=spinner)
+        else:
+            result = call_claude_json(QA_SYSTEM, prompt)
 
         issues_text = "\n".join(
             f"  [{i['severity'].upper()}] {i['description']}"
@@ -235,13 +303,16 @@ Output a JSON object with this exact shape:
 
 class reviewer_agent:
     @staticmethod
-    def run(state: SwarmState) -> AgentResult:
+    def run(state: SwarmState, spinner=None) -> AgentResult:
         prompt = (
             f"REQUIREMENTS:\n{state.requirements}\n\n"
             f"QA REPORT:\n{state.qa_report}\n\n"
             f"CODE TO REVIEW:\n{state.code}"
         )
-        result = call_claude_json(REVIEWER_SYSTEM, prompt)
+        if _use_cc("reviewer"):
+            result = call_claude_cc_json(REVIEWER_SYSTEM, prompt, "reviewer", spinner=spinner)
+        else:
+            result = call_claude_json(REVIEWER_SYSTEM, prompt)
 
         comments_text = "\n".join(
             f"  [{c['type'].upper()}] {c['description']}"

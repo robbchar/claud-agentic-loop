@@ -10,7 +10,8 @@ import sys
 from pathlib import Path
 
 
-FILE_SIZE_THRESHOLD = 10 * 1024  # 10 KB
+FILE_SIZE_THRESHOLD = 10 * 1024   # 10 KB — prompt/skip non-exempt files above this
+TEST_FILE_MAX = 32 * 1024         # 32 KB — hard cap for auto-included test files
 
 IGNORE_DIRS = {
     ".git", "node_modules", "__pycache__", ".venv", "venv", "env",
@@ -21,6 +22,9 @@ IGNORE_DIRS = {
 IGNORE_FILES = {
     ".DS_Store", "Thumbs.db", ".env", ".env.local", ".env.production",
     "swarm_run.json",
+    # Lock files — large, generated, never useful as dev context
+    "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
+    "composer.lock", "Gemfile.lock", "poetry.lock", "uv.lock",
 }
 
 FRAMEWORK_INDICATORS: dict[str, str] = {
@@ -42,6 +46,17 @@ FRAMEWORK_INDICATORS: dict[str, str] = {
     "pom.xml":            "Java/Maven",
     "build.gradle":       "Java/Gradle",
 }
+
+
+def _is_test_file(filename: str) -> bool:
+    """Return True for co-located test/spec files that must always be included."""
+    name = filename.lower()
+    return (
+        ".test." in name
+        or ".spec." in name
+        or name.startswith("test_")
+        or name.endswith("_test.py")
+    )
 
 
 def detect_framework(root: Path) -> str:
@@ -115,7 +130,10 @@ def scan_project(root_dir: str = ".", interactive: bool = True) -> str:
 
             tree_lines.append(f"{'  ' * (depth + 1)}{filename}")
 
-            if size > FILE_SIZE_THRESHOLD:
+            is_test = _is_test_file(filename)
+            exempt = filename.endswith(".md") or is_test
+
+            if size > FILE_SIZE_THRESHOLD and not exempt:
                 if interactive:
                     skipped = _prompt_large_file(rel_path, size_kb)
                     if skipped:
@@ -123,12 +141,15 @@ def scan_project(root_dir: str = ".", interactive: bool = True) -> str:
                 else:
                     # Non-interactive: skip silently, path already in tree
                     continue
-            else:
-                try:
-                    content = file_path.read_text(encoding="utf-8", errors="replace")
-                    file_contents.append(f"--- FILE: {rel_path} ---\n{content}")
-                except Exception:
-                    pass  # binary files, permission errors
+
+            try:
+                content = file_path.read_text(encoding="utf-8", errors="replace")
+                # Cap test files to avoid bloating the context window
+                if is_test and len(content) > TEST_FILE_MAX:
+                    content = content[:TEST_FILE_MAX] + "\n... [TRUNCATED]\n"
+                file_contents.append(f"--- FILE: {rel_path} ---\n{content}")
+            except Exception:
+                pass  # binary files, permission errors
 
     tree_str = "\n".join(tree_lines) or "  (empty — greenfield project)"
     contents_str = "\n\n".join(file_contents) if file_contents else "  (no existing source files)"

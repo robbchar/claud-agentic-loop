@@ -120,6 +120,14 @@ class TestScanProject:
             result = scan_project(str(tmp_path), interactive=True)
         assert "big.py" in result
 
+    def test_large_md_file_always_included(self, tmp_path):
+        big_md = tmp_path / "TASKS.md"
+        big_md.write_text("# Task\n" * (FILE_SIZE_THRESHOLD // 7 + 100))
+        result = scan_project(str(tmp_path), interactive=False)
+        # .md files are exempt from the large-file threshold — contents must appear
+        assert "TASKS.md" in result
+        assert "# Task" in result
+
     def test_file_separator_format_in_contents(self, tmp_path):
         (tmp_path / "app.py").write_text("def main(): pass")
         result = scan_project(str(tmp_path), interactive=False)

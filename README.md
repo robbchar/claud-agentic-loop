@@ -42,12 +42,13 @@ feature_request  ──OR──  docs/ARCHITECTURE.md + docs/TASKS.md
 ## File Structure
 
 ```
-agent_swarm/
+agent_swarm/--architecture
 ├── main.py              # Entry point / CLI
 ├── orchestrator.py      # Loop control logic — the "brain"
 ├── agents.py            # All 4 agents (PM, Dev, QA, Reviewer)
 ├── models.py            # SwarmState and AgentResult dataclasses
-├── claude_client.py     # Raw Anthropic API wrapper
+├── claude_client.py     # Raw Anthropic API wrapper (PM, Reviewer)
+├── claude_cc_client.py  # claude -p subprocess wrapper with MCP access (Dev, QA)
 ├── scout.py             # Project discovery — scans output dir before generation
 ├── writer.py            # Post-approval file writer — parses FILE blocks and writes to disk
 ├── sandbox.py           # Optional Podman-based code execution sandbox
@@ -58,17 +59,18 @@ agent_swarm/
 ### What each file is responsible for
 
 
-| File                 | Responsibility                                                                          |
-| -------------------- | --------------------------------------------------------------------------------------- |
-| `models.py`          | Shared state. The single object passed between all agents.                              |
-| `claude_client.py`   | The only place that calls `anthropic.Anthropic()`. Handles JSON extraction.             |
-| `agents.py`          | System prompts + prompt assembly + response parsing for each agent.                     |
-| `orchestrator.py`    | The loop: decides when to advance, retry, or stop. Calls writer after approval.         |
-| `main.py`            | CLI glue. Runs scout, passes args, prints summary, dumps history.                       |
-| `scout.py`           | Walks the output directory, detects framework, reads existing files into project context.|
-| `writer.py`          | Parses `--- FILE: path ---` blocks from approved code and writes them to disk.          |
-| `sandbox.py`         | Runs generated code in an isolated Podman container. Off by default.                    |
-| `Dockerfile.sandbox` | Defines the sandbox image with pre-installed packages for generated code.               |
+| File                  | Responsibility                                                                            |
+| --------------------- | ----------------------------------------------------------------------------------------- |
+| `models.py`           | Shared state. The single object passed between all agents.                                |
+| `claude_client.py`    | Direct Anthropic API calls. Used by PM and Reviewer agents.                               |
+| `claude_cc_client.py` | Shells out to `claude -p` with `--allowedTools`. Used by Dev and QA for MCP access.       |
+| `agents.py`           | System prompts + prompt assembly + response parsing for each agent.                       |
+| `orchestrator.py`     | The loop: decides when to advance, retry, or stop. Calls writer after approval.           |
+| `main.py`             | CLI glue. Runs scout, passes args, prints summary, dumps history.                         |
+| `scout.py`            | Walks the output directory, detects framework, reads existing files into project context. |
+| `writer.py`           | Parses `--- FILE: path ---` blocks from approved code and writes them to disk.            |
+| `sandbox.py`          | Runs generated code in an isolated Podman container. Off by default.                      |
+| `Dockerfile.sandbox`  | Defines the sandbox image with pre-installed packages for generated code.                 |
 
 
 ## Setup
@@ -234,6 +236,53 @@ Run a specific file:
 ```bash
 python -m pytest test_agents.py -v
 ```
+
+## MCP / Claude Code subprocess mode
+
+By default, the **Dev** and **QA** agents shell out to `claude -p` instead of
+calling the Anthropic API directly. This gives them access to your locally
+configured MCP servers while keeping the swarm's isolation model intact.
+
+### What each agent can access
+
+
+| Agent        | Uses subprocess? | Allowed MCP tools                                                                  |
+| ------------ | ---------------- | ---------------------------------------------------------------------------------- |
+| **PM**       | No               | — (direct API only)                                                                |
+| **Dev**      | Yes (default)    | `mcp__context7__`* — library doc lookups while writing code                        |
+| **QA**       | Yes (default)    | `mcp__chrome-devtools__`*, `mcp__context7__`* — browser verification + doc lookups |
+| **Reviewer** | No (default)     | — (direct API only)                                                                |
+
+
+### Isolation
+
+`--allowedTools` is passed explicitly on every subprocess call. Agents receive
+**only** the MCP tools listed above — `Bash`, `Edit`, `Write`, and all other
+filesystem/shell tools are excluded. The file writer boundary (`writer.py`)
+remains the only path from agent output to disk.
+
+### Controlling which agents use the subprocess
+
+```bash
+# Default — dev and qa use claude -p
+python main.py
+
+# Pull reviewer in
+SWARM_CC_AGENTS=dev,qa,reviewer python main.py
+
+# Disable for all agents (pure Anthropic API mode, no MCP)
+SWARM_CC_AGENTS= python main.py
+```
+
+### Prerequisites
+
+- `claude` CLI must be in your `PATH` (`which claude` should resolve)
+- You must be authenticated (`claude` should work interactively)
+- The MCP servers you want agents to use must be configured in your Claude Code settings
+
+If the `claude` binary is not found or exits non-zero, the subprocess call raises
+a `RuntimeError` with the stderr output. Use `SWARM_CC_AGENTS=` to fall back to
+pure API mode if needed.
 
 ## Sandbox (optional)
 

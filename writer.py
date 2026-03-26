@@ -17,13 +17,22 @@ _FILE_BLOCK_RE = re.compile(
 )
 
 
+_FENCE_RE = re.compile(r"^```[^\n]*\n(.*?)```\s*$", re.DOTALL)
+
+
+def _strip_fences(content: str) -> str:
+    """Remove a single wrapping markdown code fence if present."""
+    m = _FENCE_RE.match(content.strip())
+    return m.group(1) if m else content
+
+
 def parse_files(code: str) -> list[tuple[str, str]]:
     """
     Extract (relative_path, content) pairs from FILE-separated code output.
     Returns an empty list if no FILE separators are present.
     """
     return [
-        (m.group("path").strip(), m.group("content").rstrip("\n"))
+        (m.group("path").strip(), _strip_fences(m.group("content").rstrip("\n")))
         for m in _FILE_BLOCK_RE.finditer(code)
     ]
 

@@ -1,10 +1,17 @@
 """Tests for main.py — CLI argument parsing, file loading, dry-run, and spec doc loading."""
 
+import json
 import sys
 from unittest.mock import patch, MagicMock
 import pytest
 
 from models import SwarmState
+
+
+@pytest.fixture(autouse=True)
+def _set_api_key(monkeypatch):
+    """Ensure ANTHROPIC_API_KEY is set for all tests that invoke main()."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 
 
 # ---------------------------------------------------------------------------
@@ -16,7 +23,7 @@ FAKE_PROJECT_CONTEXT = "PROJECT CONTEXT\n========\nFramework : Unknown\n"
 
 def _fake_run_swarm(captured: dict):
     """Returns a run_swarm side_effect that captures the state passed to it."""
-    def _side_effect(state: SwarmState, verbose: bool = True) -> SwarmState:
+    def _side_effect(state: SwarmState, verbose: bool = True, checkpoint_path=None) -> SwarmState:
         captured["state"] = state
         state.history = []
         return state
@@ -330,3 +337,88 @@ class TestFeatureRequestSourcing:
             with pytest.raises(SystemExit) as exc_info:
                 m.main()
         assert exc_info.value.code == 1
+
+
+# ---------------------------------------------------------------------------
+# --resume flag
+# ---------------------------------------------------------------------------
+
+class TestResume:
+    CHECKPOINT = {
+        "version": 1,
+        "feature_request": "build a deck handler",
+        "output_dir": ".",
+        "requirements": "MILESTONE: M1\n\nTASKS:\n  [1.1] Setup\n  [1.2] Service\n\nGLOBAL CONSTRAINTS:\n  - Node.js",
+        "completed_tasks": ["task 1 block"],
+        "pending_tasks": ["task 2 block"],
+        "history": [],
+    }
+
+    def _write_checkpoint(self, tmp_path, data=None) -> str:
+        path = tmp_path / "swarm_run.json"
+        path.write_text(json.dumps(data or self.CHECKPOINT))
+        return str(path)
+
+    def test_resume_restores_pending_tasks(self, tmp_path):
+        checkpoint_path = self._write_checkpoint(tmp_path)
+        captured = {}
+        import main as m
+        with (
+            patch("main.run_swarm", side_effect=_fake_run_swarm(captured)),
+            patch("main.scan_project", _scan_noop),
+            patch("main.json.dump"),
+            patch("sys.argv", ["main.py", "--resume", checkpoint_path]),
+        ):
+            m.main()
+        assert captured["state"].pending_tasks == ["task 2 block"]
+
+    def test_resume_restores_completed_tasks(self, tmp_path):
+        checkpoint_path = self._write_checkpoint(tmp_path)
+        captured = {}
+        import main as m
+        with (
+            patch("main.run_swarm", side_effect=_fake_run_swarm(captured)),
+            patch("main.scan_project", _scan_noop),
+            patch("main.json.dump"),
+            patch("sys.argv", ["main.py", "--resume", checkpoint_path]),
+        ):
+            m.main()
+        assert captured["state"].completed_tasks == ["task 1 block"]
+
+    def test_resume_skips_pm_by_setting_requirements(self, tmp_path):
+        checkpoint_path = self._write_checkpoint(tmp_path)
+        captured = {}
+        import main as m
+        with (
+            patch("main.run_swarm", side_effect=_fake_run_swarm(captured)),
+            patch("main.scan_project", _scan_noop),
+            patch("main.json.dump"),
+            patch("sys.argv", ["main.py", "--resume", checkpoint_path]),
+        ):
+            m.main()
+        # requirements must be non-empty so orchestrator skips PM agent
+        assert captured["state"].requirements
+
+    def test_resume_missing_file_exits(self, tmp_path):
+        import main as m
+        with (
+            patch("main.run_swarm"),
+            patch("sys.argv", ["main.py", "--resume", str(tmp_path / "nope.json")]),
+        ):
+            with pytest.raises(SystemExit) as exc_info:
+                m.main()
+        assert exc_info.value.code == 1
+
+    def test_resume_no_pending_tasks_exits_cleanly(self, tmp_path, capsys):
+        data = {**self.CHECKPOINT, "pending_tasks": []}
+        checkpoint_path = self._write_checkpoint(tmp_path, data)
+        import main as m
+        run_mock = MagicMock()
+        with (
+            patch("main.run_swarm", run_mock),
+            patch("sys.argv", ["main.py", "--resume", checkpoint_path]),
+        ):
+            m.main()
+        run_mock.assert_not_called()
+        out = capsys.readouterr().out
+        assert "nothing to do" in out
