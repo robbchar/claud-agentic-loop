@@ -51,7 +51,13 @@ def _build_cmd(
 ) -> list[str]:
     # Prompt is passed via stdin (not as a CLI argument) to avoid Windows'
     # 32,767-character command line limit when project context is large.
-    cmd = ["claude", "-p", "--system-prompt", system_prompt]
+    # --output-format stream-json emits newline-delimited JSON events so we
+    # can parse tool calls and update the spinner in real time.
+    cmd = [
+        "claude", "-p",
+        "--output-format", "stream-json",
+        "--system-prompt", system_prompt,
+    ]
     if allowed_tools:
         cmd += ["--allowedTools"] + allowed_tools
     else:
@@ -62,21 +68,38 @@ def _build_cmd(
 _TIMEOUT = int(os.environ.get("SWARM_CC_TIMEOUT", "600"))
 
 
+def _tool_label(tool_name: str, tool_input: dict) -> str:
+    """Convert an MCP tool name + input into a short human-readable status."""
+    if "context7" in tool_name:
+        if "resolve" in tool_name:
+            lib = tool_input.get("libraryName", "")
+            return f"Looking up '{lib}'" if lib else "Looking up library"
+        if "get-library-docs" in tool_name:
+            topic = tool_input.get("topic", "")
+            return f"Reading docs: {topic}" if topic else "Reading docs"
+        return "Checking docs"
+    if "chrome-devtools" in tool_name:
+        return "Checking browser"
+    # Generic: strip mcp__ prefix + namespace, humanise the verb
+    clean = tool_name.removeprefix("mcp__")
+    parts = clean.split("__", 1)
+    verb = parts[-1].replace("-", " ")
+    return f"Using {verb}"
+
+
 def _run(cmd: list[str], user_message: str, label: str = "agent", spinner=None) -> str:
     """
-    Run `claude -p` and stream its stdout to the terminal in real time
-    while also collecting it for the return value. Kills the process and
-    raises RuntimeError if it exceeds _TIMEOUT seconds.
+    Run `claude -p --output-format stream-json` and parse the event stream.
 
-    The prompt is written to stdin rather than passed as a CLI argument to
-    avoid Windows' 32,767-character command line length limit.
+    - Tool-use events update the spinner so the user sees e.g.
+      "💻 [Dev Agent] Writing code [3.4] — Looking up 'react'... (1m 12s)"
+    - Text content is printed to the terminal as it streams.
+    - The final `result` event provides the canonical return value.
+    - On timeout, any text collected so far is returned as partial output
+      rather than discarding everything.
 
-    If a Spinner is passed, it is cleared as soon as the first output chunk
-    arrives so streaming output is not interleaved with the spinner.
+    The prompt is written to stdin to avoid Windows' 32 767-char CLI limit.
     """
-    # On Windows, Ctrl+C is broadcast to every process sharing the console.
-    # Claude catches it and continues, so we isolate it in its own process group
-    # and kill it ourselves when interrupted.
     popen_kwargs: dict = {}
     if os.name == "nt":
         popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
@@ -91,51 +114,93 @@ def _run(cmd: list[str], user_message: str, label: str = "agent", spinner=None) 
         **popen_kwargs,
     )
 
-    # Write prompt to stdin in a thread to avoid blocking if the pipe buffer fills.
     def _write_stdin() -> None:
         assert proc.stdin is not None
         try:
             proc.stdin.write(user_message)
             proc.stdin.close()
         except (BrokenPipeError, OSError):
-            pass  # process already exited
+            pass
 
     threading.Thread(target=_write_stdin, daemon=True).start()
 
-    collected: list[str] = []
-    start = time.monotonic()
-    _first = True
+    collected: list[str] = []   # text chunks streamed so far (for partial return)
+    final_result: list[str] = []  # populated from the result event
+    _text_started = False
 
     def _stream() -> None:
-        nonlocal _first
+        nonlocal _text_started
         assert proc.stdout is not None
-        for chunk in iter(lambda: proc.stdout.read(64), ""):
-            if _first and spinner is not None:
-                spinner.clear()
-                _first = False
-            collected.append(chunk)
-            print(chunk, end="", flush=True)
+        for raw_line in proc.stdout:
+            line = raw_line.rstrip("\n")
+            if not line:
+                continue
 
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                # Shouldn't happen with stream-json but pass non-JSON through
+                if not _text_started:
+                    if spinner is not None:
+                        spinner.clear()
+                    _text_started = True
+                print(line, flush=True)
+                continue
+
+            etype = event.get("type")
+
+            if etype == "assistant":
+                for block in event.get("message", {}).get("content", []):
+                    btype = block.get("type")
+                    if btype == "tool_use":
+                        if spinner is not None and not _text_started:
+                            spinner.update(_tool_label(
+                                block.get("name", ""),
+                                block.get("input") or {},
+                            ))
+                    elif btype == "text":
+                        text = block.get("text", "")
+                        if text:
+                            if not _text_started:
+                                if spinner is not None:
+                                    spinner.clear()
+                                _text_started = True
+                            collected.append(text)
+                            print(text, end="", flush=True)
+
+            elif etype == "result":
+                result_text = event.get("result") or ""
+                if result_text:
+                    final_result.append(result_text)
+
+    start = time.monotonic()
     reader = threading.Thread(target=_stream, daemon=True)
     reader.start()
 
-    # Poll instead of blocking wait() so Ctrl+C is handled promptly on Windows.
     try:
         while proc.poll() is None:
             elapsed = time.monotonic() - start
             if elapsed > _TIMEOUT:
                 proc.kill()
                 reader.join(timeout=2)
+                partial = (final_result[0] if final_result else "".join(collected)).strip()
+                if partial:
+                    print(
+                        f"\n\n⚠️  [{label}] timed out after {elapsed:.0f}s "
+                        f"(SWARM_CC_TIMEOUT={_TIMEOUT}) — returning partial output.",
+                        flush=True,
+                    )
+                    return partial
                 raise RuntimeError(
                     f"claude subprocess timed out after {elapsed:.0f}s "
-                    f"(SWARM_CC_TIMEOUT={_TIMEOUT})"
+                    f"(SWARM_CC_TIMEOUT={_TIMEOUT}) — no output was produced"
                 )
             time.sleep(0.1)
     except KeyboardInterrupt:
         print(f"\n\n⛔  Interrupted — killing [{label}] subprocess...", flush=True)
         proc.kill()
         if proc.stdout:
-            proc.stdout.close()  # unblocks the reader thread's read() call
+            proc.stdout.close()
         reader.join(timeout=2)
         raise
 
@@ -146,8 +211,8 @@ def _run(cmd: list[str], user_message: str, label: str = "agent", spinner=None) 
     if proc.returncode != 0:
         assert proc.stderr is not None
         stderr_text = proc.stderr.read().strip()
-        stdout_text = "".join(collected).strip()
-        # Check both streams for billing messages — claude writes them to stdout
+        # result event may already hold an error message
+        stdout_text = (final_result[0] if final_result else "".join(collected)).strip()
         combined = f"{stdout_text}\n{stderr_text}".lower()
         if "credit balance" in combined or "insufficient" in combined or "billing" in combined:
             raise BillingError(
@@ -158,7 +223,7 @@ def _run(cmd: list[str], user_message: str, label: str = "agent", spinner=None) 
             f"claude subprocess exited {proc.returncode}:\n{stderr_text or stdout_text}"
         )
 
-    return "".join(collected).strip()
+    return (final_result[0] if final_result else "".join(collected)).strip()
 
 
 def call_claude_cc(
@@ -189,7 +254,6 @@ def call_claude_cc(
     if expect_json:
         text = text.strip()
         # Extract JSON from a fenced block even when prose precedes it.
-        # The model often outputs analysis, then wraps the JSON in ```json ... ```.
         extracted = False
         for fence in ("```json\n", "```\n"):
             if fence in text:
