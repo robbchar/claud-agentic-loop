@@ -76,16 +76,19 @@ def _prompt_large_file(rel_path: str, size_kb: float) -> bool:
     """
     print(f"\n  Large file: {rel_path} ({size_kb:.1f} KB)")
     print("  Files over 10 KB are a code smell — consider breaking this down first.")
-    print("  [s] Skip  — Dev agent won't see its contents (listed in tree only)")
-    print("  [q] Quit  — exit now and refactor the file first (recommended)")
+    print("  [s] Skip     — Dev agent won't see its contents (listed in tree only)")
+    print("  [q] Quit     — exit now and refactor the file first (recommended)")
+    print("  [c] Continue — include it anyway and proceed")
     while True:
-        choice = input("  Choice [s/q]: ").strip().lower()
+        choice = input("  Choice [s/q/c]: ").strip().lower()
         if choice == "s":
             return True
         if choice == "q":
             print("Good call. Break it down, then re-run.")
             sys.exit(0)
-        print("  Please enter 's' or 'q'.")
+        if choice == "c":
+            return False
+        print("  Please enter 's', 'q', or 'c'.")
 
 
 def scan_project(root_dir: str = ".", interactive: bool = True) -> str:

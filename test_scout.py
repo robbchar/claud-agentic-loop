@@ -112,6 +112,14 @@ class TestScanProject:
             with pytest.raises(SystemExit):
                 scan_project(str(tmp_path), interactive=True)
 
+    def test_large_file_included_on_c_choice(self, tmp_path):
+        big = tmp_path / "big.py"
+        big.write_text("secret = 42\n" * (FILE_SIZE_THRESHOLD // 12 + 100))
+        with patch("builtins.input", return_value="c"):
+            result = scan_project(str(tmp_path), interactive=True)
+        assert "big.py" in result
+        assert "secret = 42" in result
+
     def test_large_file_reprompts_on_invalid_input(self, tmp_path):
         big = tmp_path / "big.py"
         big.write_text("x = 1\n" * (FILE_SIZE_THRESHOLD // 6 + 100))
